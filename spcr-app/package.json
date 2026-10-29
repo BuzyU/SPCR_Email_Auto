@@ -1,0 +1,53 @@
+{
+  "name": "spcr",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SPCR (Student Progression & Company Relation) — Hosted placement-email triage, opportunity matching, Groq announcement drafting, and guided manual WhatsApp dispatch.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsx scripts/build-all.ts",
+    "build:client": "tsx scripts/build-client.ts",
+    "build:extension": "tsx scripts/build-extension.ts",
+    "preload:model": "tsx scripts/preload-classifier-model.ts",
+    "benchmark:classifier": "tsx scripts/benchmark-classifier.ts",
+    "migrate": "tsx src/db/migrate-cli.ts",
+    "generate:secrets": "tsx scripts/generate-secrets.ts",
+    "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
+    "dev": "tsx src/server.ts",
+    "dev:worker": "tsx src/worker.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsx scripts/security-and-lint-audit.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "@huggingface/transformers": "^4.3.2",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "fflate": "^0.8.2",
+    "helmet": "^8.0.0",
+    "pdfjs-dist": "^4.10.38",
+    "pg": "^8.13.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.13.5",
+    "@types/pg": "^8.11.11",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@types/supertest": "^6.0.2",
+    "esbuild": "^0.28.2",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^5.0.5"
+  }
+}

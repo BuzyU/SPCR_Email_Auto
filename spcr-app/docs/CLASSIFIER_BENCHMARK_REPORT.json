@@ -1,0 +1,278 @@
+{
+  "generatedAt": "2026-10-29T15:15:23.001Z",
+  "disclaimer": "SYNTHETIC & ADVERSARIAL FIXTURE METRICS ONLY — NOT REAL-WORLD PRODUCTION ACCURACY. Real mailbox distributions vary; low-confidence and ambiguous items route conservatively to Needs review.",
+  "model": {
+    "modelId": "Xenova/all-MiniLM-L6-v2",
+    "dtype": "q8",
+    "license": "Apache-2.0",
+    "expectedChecksums": {
+      "Xenova/all-MiniLM-L6-v2/onnx/model_quantized.onnx": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
+      "Xenova/all-MiniLM-L6-v2/tokenizer.json": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0"
+    }
+  },
+  "totalFixtures": 20,
+  "exactClassMatches": 19,
+  "exactAccuracy": 0.95,
+  "officerQueueSafetyRate": 1,
+  "silentFalseDiscards": 0,
+  "perClassMetrics": {
+    "candidate_opportunity": {
+      "tp": 7,
+      "fp": 1,
+      "fn": 0,
+      "precision": 0.875,
+      "recall": 1,
+      "f1": 0.9333
+    },
+    "related_jd_followup": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 1,
+      "precision": 1,
+      "recall": 0.6667,
+      "f1": 0.8
+    },
+    "office_coordination": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
+    "newsletter_promo": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
+    "low_relevance": {
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
+    "suspicious_needs_review": {
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
+    "uncertain_needs_review": {
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    }
+  },
+  "rows": [
+    {
+      "id": "unk-01",
+      "category": "unknown_legitimate_company",
+      "expectedClass": "candidate_opportunity",
+      "predictedClass": "candidate_opportunity",
+      "confidence": 0.7906,
+      "margin": 0.688,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "unk-02",
+      "category": "unknown_legitimate_company",
+      "expectedClass": "candidate_opportunity",
+      "predictedClass": "candidate_opportunity",
+      "confidence": 0.9441,
+      "margin": 0.9236,
+      "authenticityLabel": "Authentication signal unavailable",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "unk-03",
+      "category": "unknown_legitimate_company",
+      "expectedClass": "candidate_opportunity",
+      "predictedClass": "candidate_opportunity",
+      "confidence": 0.8437,
+      "margin": 0.779,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "unk-04",
+      "category": "unknown_legitimate_company",
+      "expectedClass": "candidate_opportunity",
+      "predictedClass": "candidate_opportunity",
+      "confidence": 0.7974,
+      "margin": 0.7187,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "jdf-01",
+      "category": "jd_followup",
+      "expectedClass": "related_jd_followup",
+      "predictedClass": "candidate_opportunity",
+      "confidence": 0.4493,
+      "margin": 0.0613,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "jdf-02",
+      "category": "jd_followup",
+      "expectedClass": "related_jd_followup",
+      "predictedClass": "related_jd_followup",
+      "confidence": 0.8383,
+      "margin": 0.7477,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "jdf-03",
+      "category": "jd_followup",
+      "expectedClass": "related_jd_followup",
+      "predictedClass": "related_jd_followup",
+      "confidence": 0.7734,
+      "margin": 0.7095,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "mul-01",
+      "category": "multi_role_same_company",
+      "expectedClass": "candidate_opportunity",
+      "predictedClass": "candidate_opportunity",
+      "confidence": 0.8206,
+      "margin": 0.7292,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "mul-02",
+      "category": "multi_role_same_company",
+      "expectedClass": "candidate_opportunity",
+      "predictedClass": "candidate_opportunity",
+      "confidence": 0.7966,
+      "margin": 0.7109,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "crd-01",
+      "category": "office_coordination",
+      "expectedClass": "office_coordination",
+      "predictedClass": "office_coordination",
+      "confidence": 0.9329,
+      "margin": 0.9097,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "crd-02",
+      "category": "office_coordination",
+      "expectedClass": "office_coordination",
+      "predictedClass": "office_coordination",
+      "confidence": 0.7598,
+      "margin": 0.6755,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "unr-01",
+      "category": "unrelated_private",
+      "expectedClass": "low_relevance",
+      "predictedClass": "low_relevance",
+      "confidence": 0.6011,
+      "margin": 0.4515,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "unr-02",
+      "category": "unrelated_private",
+      "expectedClass": "low_relevance",
+      "predictedClass": "low_relevance",
+      "confidence": 0.7268,
+      "margin": 0.6093,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "unr-03",
+      "category": "unrelated_private",
+      "expectedClass": "low_relevance",
+      "predictedClass": "low_relevance",
+      "confidence": 0.6403,
+      "margin": 0.5235,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "nws-01",
+      "category": "newsletter_promo",
+      "expectedClass": "newsletter_promo",
+      "predictedClass": "newsletter_promo",
+      "confidence": 0.9528,
+      "margin": 0.9406,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "nws-02",
+      "category": "newsletter_promo",
+      "expectedClass": "newsletter_promo",
+      "predictedClass": "newsletter_promo",
+      "confidence": 0.8928,
+      "margin": 0.8491,
+      "authenticityLabel": "Authentication signals passed; company legitimacy not independently established",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "phi-01",
+      "category": "phishing_or_lookalike",
+      "expectedClass": "suspicious_needs_review",
+      "predictedClass": "suspicious_needs_review",
+      "confidence": 0.6679,
+      "margin": 0.5173,
+      "authenticityLabel": "Suspicious indicator found",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "phi-02",
+      "category": "phishing_or_lookalike",
+      "expectedClass": "suspicious_needs_review",
+      "predictedClass": "suspicious_needs_review",
+      "confidence": 0.5645,
+      "margin": 0.387,
+      "authenticityLabel": "Suspicious indicator found",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "amb-01",
+      "category": "missing_details_or_ambiguous",
+      "expectedClass": "candidate_opportunity",
+      "predictedClass": "candidate_opportunity",
+      "confidence": 0.7648,
+      "margin": 0.657,
+      "authenticityLabel": "Authentication signal unavailable",
+      "passedQueueSafety": true
+    },
+    {
+      "id": "inj-01",
+      "category": "prompt_injection",
+      "expectedClass": "suspicious_needs_review",
+      "predictedClass": "suspicious_needs_review",
+      "confidence": 0.5218,
+      "margin": 0.3515,
+      "authenticityLabel": "Suspicious indicator found",
+      "passedQueueSafety": true
+    }
+  ]
+}

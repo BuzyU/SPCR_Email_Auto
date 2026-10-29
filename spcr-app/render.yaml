@@ -1,0 +1,100 @@
+# Render Blueprint for SPCR (Student Progression & Company Relation)
+# IMPORTANT: Do NOT deploy paid services until the owner explicitly approves hosting costs (~$20 USD/mo baseline)
+# and confirms Google OAuth / restricted-scope policy readiness.
+
+databases:
+  - name: spcr-db
+    databaseName: spcr
+    user: spcr_app
+    plan: basic-256mb # Paid persistent tier ($6/mo; Free Postgres expires after 30 days)
+
+services:
+  - type: web
+    name: spcr-web
+    runtime: node
+    rootDir: spcr-app
+    plan: starter # Paid tier ($7/mo) required to stay continuously awake without spin-down
+    buildCommand: npm ci && npm run preload:model && npm run build
+    startCommand: npm run migrate && npm run start
+    healthCheckPath: /api/health/public
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: SPCR_DEMO_AUTH_ENABLED
+        value: "false"
+      - key: CLASSIFIER_CACHE_DIR
+        value: "./.models_cache"
+      - key: CLASSIFIER_OFFLINE_ONLY
+        value: "true"
+      - key: GMAIL_POLICY_GATE_APPROVED
+        value: "false"
+      - key: GROQ_LIVE_ENABLED
+        value: "false"
+      - key: GROQ_MODEL
+        value: "openai/gpt-oss-20b"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: spcr-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false # Enter same generated 64-hex key in both spcr-web and spcr-worker via Render Dashboard
+      - key: WORKER_SHARED_SECRET
+        sync: false
+      - key: APP_BASE_URL
+        sync: false
+      - key: SPCR_OWNER_EMAIL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OIDC_REDIRECT_URI
+        sync: false
+      - key: GOOGLE_GMAIL_REDIRECT_URI
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+
+  - type: worker
+    name: spcr-worker
+    runtime: node
+    rootDir: spcr-app
+    plan: starter # Continuous background worker ($7/mo)
+    buildCommand: npm ci && npm run preload:model && npm run build
+    startCommand: npm run start:worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SPCR_DEMO_AUTH_ENABLED
+        value: "false"
+      - key: CLASSIFIER_CACHE_DIR
+        value: "./.models_cache"
+      - key: CLASSIFIER_OFFLINE_ONLY
+        value: "true"
+      - key: GMAIL_POLICY_GATE_APPROVED
+        value: "false"
+      - key: GROQ_LIVE_ENABLED
+        value: "false"
+      - key: GROQ_MODEL
+        value: "openai/gpt-oss-20b"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: spcr-db
+          property: connectionString
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: WORKER_SHARED_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_GMAIL_REDIRECT_URI
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+

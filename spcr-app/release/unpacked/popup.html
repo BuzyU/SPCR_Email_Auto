@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SPCR Companion</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="popup-header">
+      <div>
+        <div class="popup-title">SPCR Companion</div>
+        <div class="popup-subtitle">Student Progression &amp; Company Relation</div>
+      </div>
+      <span id="status-pill" class="pill">Checking...</span>
+    </header>
+
+    <main class="popup-body">
+      <div id="feedback-box" class="notice hidden"></div>
+
+      <section id="paired-section" class="card hidden">
+        <div class="section-title">Manual Scan &amp; Triage Fallback</div>
+        <p class="muted-text">
+          Scans one Gmail message via your hosted SPCR server using the local classifier (zero Groq calls).
+        </p>
+        <label class="field-label" for="gmail-msg-id">Gmail Message ID (hex)</label>
+        <input
+          id="gmail-msg-id"
+          type="text"
+          class="text-input mono"
+          placeholder="e.g. 192d8f4a7c110e2b"
+          autocomplete="off"
+        />
+        <div class="btn-row">
+          <button id="btn-scan" type="button" class="btn btn-primary">Scan Email</button>
+          <button id="btn-format-groq" type="button" class="btn" disabled>Format with Groq</button>
+        </div>
+
+        <div id="scan-result-box" class="result-box hidden"></div>
+
+        <div class="btn-row" style="margin-top: 10px;">
+          <button id="btn-open-review" type="button" class="btn">Review/Edit in SPCR</button>
+          <button id="btn-open-groups" type="button" class="btn">Choose WhatsApp Groups</button>
+        </div>
+
+        <hr class="divider" />
+        <div class="meta-row">
+          <span id="paired-owner" class="mono muted-text"></span>
+          <button id="btn-unpair" type="button" class="btn btn-small">Unpair</button>
+        </div>
+      </section>
+
+      <section id="pair-form-section" class="card hidden">
+        <div class="section-title">Pair Extension with SPCR</div>
+        <p class="muted-text">
+          Generate a 12-character one-time pairing code inside SPCR Settings and enter it below. No secrets are stored in extension source.
+        </p>
+        <label class="field-label" for="backend-origin">SPCR Hosted Backend Origin</label>
+        <input
+          id="backend-origin"
+          type="url"
+          class="text-input mono"
+          placeholder="https://spcr-web.onrender.com"
+          autocomplete="off"
+        />
+        <label class="field-label" for="pairing-code">One-Time Pairing Code</label>
+        <input
+          id="pairing-code"
+          type="text"
+          class="text-input mono"
+          placeholder="12-CHAR CODE"
+          maxlength="32"
+          autocomplete="off"
+        />
+        <div class="btn-row">
+          <button id="btn-pair" type="button" class="btn btn-primary">Pair Extension</button>
+          <button id="btn-open-dashboard-unpaired" type="button" class="btn">Open SPCR</button>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

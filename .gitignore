@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+spcr-app/node_modules/
+
+# Production build artifacts
+dist/
+spcr-app/dist/
+
+# Local data & model caches
+.data/
+spcr-app/.data/
+.models_cache/
+spcr-app/.models_cache/
+
+# Environment files & secrets
+.env
+.env.*
+spcr-app/.env
+spcr-app/.env.*
+!.env.example
+!spcr-app/.env.example
+
+# Logs & test coverage
+*.log
+coverage/
+spcr-app/coverage/
+
+# OS & editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
