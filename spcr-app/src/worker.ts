@@ -111,6 +111,18 @@ async function main() {
   const pollIntervalMs = Number.parseInt(process.env.WORKER_POLL_INTERVAL_MS || '45000', 10) || 45_000;
   let running = true;
 
+  // CRITICAL: Register signal handlers BEFORE the polling loop so SIGINT/SIGTERM
+  // received during any active cycle still sets running=false and the loop exits
+  // after the current cycle completes (graceful drain, no abrupt kill).
+  process.on('SIGINT', () => {
+    logger.info('spcr_worker_sigint_received', { holderId });
+    running = false;
+  });
+  process.on('SIGTERM', () => {
+    logger.info('spcr_worker_sigterm_received', { holderId });
+    running = false;
+  });
+
   logger.info('spcr_background_worker_started', {
     holderId,
     pollIntervalMs,
@@ -129,15 +141,11 @@ async function main() {
       lastRetentionRunMs = Date.now();
     }
 
+    if (!running) break;
     await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
 
-  process.on('SIGINT', () => {
-    running = false;
-  });
-  process.on('SIGTERM', () => {
-    running = false;
-  });
+  logger.info('spcr_background_worker_stopped', { holderId });
 }
 
 if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}` || process.argv[1]?.endsWith('worker.ts') || process.argv[1]?.endsWith('worker.js')) {

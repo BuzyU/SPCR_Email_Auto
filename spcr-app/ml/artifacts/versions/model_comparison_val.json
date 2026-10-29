@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-29T18:55:15.336Z",
+  "generatedAt": "2026-10-29T19:58:55.060Z",
   "modelVersion": "spcr-email-intel-v1.1.2",
   "datasetVersion": "spcr-curated-v1.0.0-258aca8317+feedback1",
   "splitCounts": {
@@ -36,7 +36,7 @@
       "valMultiLabelMicroF1": 0.8739,
       "valRelevantOpportunityRecall": 1,
       "valSilentOpportunityDiscardRate": 0,
-      "avgCpuLatencyMsPerEmail": 0.171,
+      "avgCpuLatencyMsPerEmail": 0.088,
       "estimatedResidentRamMb": 8,
       "artifactSizeBytes": 211979,
       "notes": "Supervised L2 One-vs-Rest Logistic Regression over sublinear unigram/bigram zone TF-IDF + 42 thread/structural/missingness features. Sub-millisecond CPU inference, tiny memory footprint, 100% deterministic."

@@ -516,7 +516,7 @@ describe('Mandatory Addendum Sections 1, 8, 9 & 10 — Zero-Cost Architecture, S
         .set('X-CSRF-Token', csrf)
         .send({ outcome: 'officer_marked_sent', officerNote: 'Verified group header and sent manually.' });
       expect(outcomeRes.status).toBe(200);
-      expect(outcomeRes.body.batch.status).toBe('completed');
+      expect(outcomeRes.body.batch.status).toBe('completed_all_sent');
     } finally {
       await db.close();
       fs.rmSync(pgliteDir, { recursive: true, force: true });

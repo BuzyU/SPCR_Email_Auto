@@ -196,7 +196,53 @@ describe('Section 16.5 — Sections, WhatsApp Group Registry, Approval Gate & Gu
         outcome: 'officer_marked_sent',
         officerNote: 'Verified message in ECE group.',
       });
-      expect(finalBatch?.batch.status).toBe('completed');
+      // All targets resolved: t1=officer_marked_sent, t2=officer_marked_sent, t3=skipped
+      // => completed_partial (at least one sent, one skipped → not all-sent)
+      expect(finalBatch?.batch.status).toBe('completed_partial');
+      expect(finalBatch?.summary.officerMarkedSent).toBe(2);
+      expect(finalBatch?.summary.skipped).toBe(1);
+      expect(finalBatch?.summary.pending).toBe(0);
+
+      // Verify that an all-skipped batch correctly uses completed_all_skipped status
+      const sec2 = await env.services.routingService.createSection('tpo@college.edu', { name: 'All Skipped Section' });
+      const gSkip = await env.services.routingService.registerGroup('tpo@college.edu', {
+        visibleName: 'Unused Group',
+        sectionIds: [sec2!.id],
+      });
+      const scan2 = await env.services.screener.scanEmailMessage(
+        {
+          gmailMessageId: 'msg-allskip-01',
+          fromRaw: 'Campus Team <hiring@orbitdynamics.in>',
+          authHeadersRaw: 'mx.google.com; spf=pass; dkim=pass; dmarc=pass',
+          subject: 'Campus Recruitment Drive 2027 — Orbit Dynamics Graduate Engineer',
+          receivedAt: new Date().toISOString(),
+          bodyText: 'Company: Orbit Dynamics\nRole: Graduate Engineer\nCTC: 8.5 LPA\nCGPA: 7.0\nDeadline: 30 Nov 2026.',
+          attachments: [],
+          sourceOrigin: 'synthetic_fixture',
+        },
+        'auto_monitor',
+        'tpo@college.edu'
+      );
+      const oppId2 = scan2.opportunityId!;
+      const dSkip = await env.db.query<{ id: string }>(
+        'SELECT id FROM draft_versions WHERE opportunity_id = $1 ORDER BY draft_number DESC LIMIT 1',
+        [oppId2]
+      );
+      const batchSkip = await env.services.routingService.approveDraftAndCreateDispatchBatch('tpo@college.edu', {
+        opportunityId: oppId2,
+        draftVersionId: dSkip.rows[0]!.id,
+        sectionIds: [sec2!.id],
+      });
+      const tSkip = batchSkip!.targets[0]!;
+      const finalSkipBatch = await env.services.routingService.recordManualTargetOutcome('tpo@college.edu', {
+        batchId: batchSkip!.batch.id,
+        targetId: tSkip.id,
+        outcome: 'skipped',
+        officerNote: 'Not relevant for this cycle.',
+      });
+      // All skipped => completed_all_skipped (NOT the old misleading 'completed')
+      expect(finalSkipBatch?.batch.status).toBe('completed_all_skipped');
+      expect(finalSkipBatch?.summary.officerMarkedSent).toBe(0);
     } finally {
       await env.cleanup();
     }

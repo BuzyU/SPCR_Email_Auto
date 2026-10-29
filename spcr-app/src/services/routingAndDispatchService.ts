@@ -10,6 +10,43 @@ export type ManualDispatchStatus =
   | 'uncertain_needs_confirmation'
   | 'stale_approval_invalidated';
 
+/**
+ * Computes the accurate batch completion status from the final target-level outcome counts.
+ *
+ * Rules (non-negotiable):
+ * - `completed_all_sent`   – every non-stale target was marked officer_marked_sent.
+ * - `completed_partial`    – at least one was sent, others skipped/failed/uncertain.
+ * - `completed_all_skipped`– all targets were skipped (nothing was actually sent).
+ * - `completed_all_failed` – all targets reported failure.
+ * - `completed_uncertain`  – all unresolved targets reached uncertain_needs_confirmation.
+ *
+ * The previous single `completed` status masked zero-delivery batches from the officer.
+ */
+export function computeBatchCompletionStatus(summary: {
+  total: number;
+  pending: number;
+  officerMarkedSent: number;
+  skipped: number;
+  failed: number;
+  uncertainNeedsConfirmation: number;
+  staleInvalidated: number;
+}): string {
+  if (summary.pending > 0) return 'in_progress';
+  const activeTotal =
+    summary.officerMarkedSent +
+    summary.skipped +
+    summary.failed +
+    summary.uncertainNeedsConfirmation;
+  if (activeTotal === 0) return 'completed_all_skipped';
+  if (summary.officerMarkedSent === activeTotal) return 'completed_all_sent';
+  if (summary.officerMarkedSent > 0) return 'completed_partial';
+  if (summary.skipped === activeTotal) return 'completed_all_skipped';
+  if (summary.failed === activeTotal) return 'completed_all_failed';
+  if (summary.uncertainNeedsConfirmation === activeTotal) return 'completed_uncertain';
+  // Mixed non-sent outcomes
+  return 'completed_partial';
+}
+
 const ALLOWED_OFFICER_OUTCOMES: ReadonlySet<string> = new Set([
   'officer_marked_sent',
   'skipped',
@@ -687,11 +724,30 @@ export class RoutingAndDispatchService {
       staleInvalidated: targetsRes.rows.filter((t) => t.status === 'stale_approval_invalidated').length,
     };
 
+    // Provide a human-readable delivery status label derived from the batch DB status.
+    // The old `completed` status is kept in DB for backward compat; new writes use the granular labels.
+    const batchStatus: string = batch.status;
+    const deliveryLabel =
+      batchStatus === 'completed_all_sent'
+        ? 'All groups sent'
+        : batchStatus === 'completed_partial'
+          ? 'Partially sent — some groups skipped or failed'
+          : batchStatus === 'completed_all_skipped'
+            ? 'No groups sent — all skipped'
+            : batchStatus === 'completed_all_failed'
+              ? 'No groups sent — all failed'
+              : batchStatus === 'completed_uncertain'
+                ? 'No confirmed sends — all uncertain, awaiting officer confirmation'
+                : batchStatus === 'completed'
+                  ? 'Completed (legacy status — check target outcomes for delivery detail)'
+                  : batchStatus;
+
     return {
       batch,
       targets: targetsRes.rows,
       nextPendingTarget,
       summary,
+      deliveryLabel,
       manualVerificationNotice:
         'Manual human action required: search WhatsApp Web for the exact group title, verify group membership/name, paste the copied announcement manually, attach any JD manually if needed, press Send in WhatsApp yourself, and then record your outcome below. SPCR cannot verify WhatsApp delivery.',
     };
@@ -745,19 +801,36 @@ export class RoutingAndDispatchService {
         [params.outcome, params.officerNote?.trim() || null, target.id]
       );
 
-      const remainingRes = await tx.query<{ cnt: string }>(
-        `SELECT COUNT(*)::text AS cnt FROM dispatch_targets WHERE batch_id = $1 AND status = 'pending'`,
-        [params.batchId]
-      );
-      const remainingPending = Number.parseInt(remainingRes.rows[0]?.cnt || '0', 10);
+      const allTargetsRes = await tx.query<{
+        status: string;
+      }>(`SELECT status FROM dispatch_targets WHERE batch_id = $1`, [params.batchId]);
 
-      const nextBatchStatus = remainingPending === 0 ? 'completed' : 'in_progress';
+      const tallied = { total: 0, pending: 0, officerMarkedSent: 0, skipped: 0, failed: 0, uncertainNeedsConfirmation: 0, staleInvalidated: 0 };
+      for (const t of allTargetsRes.rows) {
+        tallied.total++;
+        if (t.status === 'pending') tallied.pending++;
+        else if (t.status === 'officer_marked_sent') tallied.officerMarkedSent++;
+        else if (t.status === 'skipped') tallied.skipped++;
+        else if (t.status === 'failed') tallied.failed++;
+        else if (t.status === 'uncertain_needs_confirmation') tallied.uncertainNeedsConfirmation++;
+        else if (t.status === 'stale_approval_invalidated') tallied.staleInvalidated++;
+      }
+
+      const nextBatchStatus = computeBatchCompletionStatus(tallied);
       await tx.query('UPDATE dispatch_batches SET status = $1, updated_at = NOW() WHERE id = $2', [
         nextBatchStatus,
         params.batchId,
       ]);
 
-      const nextOppStatus = remainingPending === 0 ? 'dispatched' : 'dispatch_in_progress';
+      // Opportunity status: dispatched only when at least one group was actually sent
+      const isTrulySent =
+        nextBatchStatus === 'completed_all_sent' || nextBatchStatus === 'completed_partial';
+      const nextOppStatus =
+        tallied.pending > 0
+          ? 'dispatch_in_progress'
+          : isTrulySent
+            ? 'dispatched'
+            : 'approved'; // Remains approved so officer can retry or cancel
       await tx.query('UPDATE opportunities SET status = $1, updated_at = NOW() WHERE id = $2', [
         nextOppStatus,
         batch.opportunity_id,
@@ -772,7 +845,8 @@ export class RoutingAndDispatchService {
           batchId: params.batchId,
           groupId: target.group_id,
           outcome: params.outcome,
-          remainingPending,
+          remainingPending: tallied.pending,
+          batchStatus: nextBatchStatus,
         },
       });
 

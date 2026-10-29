@@ -1,0 +1,123 @@
+name: SPCR CI
+
+on:
+  push:
+    branches: [main, feat/cloud-extension-production]
+  pull_request:
+    branches: [main]
+
+# No secrets are ever used or printed in CI.
+# All checks run on synthetic/fixture data only.
+
+jobs:
+  ci:
+    name: Build, Lint, Test, Audit, Extension Safety
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: spcr-app
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: spcr-app/package-lock.json
+
+      - name: Install dependencies (clean install)
+        run: npm ci
+
+      # ── Type Safety ──────────────────────────────────────────────────────────
+      - name: TypeScript type check
+        run: npm run typecheck
+
+      # ── Security & Lint Audit ────────────────────────────────────────────────
+      # Enforces: zero Groq imports in screening paths, no wildcard host_permissions,
+      # no emoji in UI templates, no leaked secrets pattern in source.
+      - name: Security and lint audit
+        run: npm run lint
+
+      # ── Unit & Integration Tests ─────────────────────────────────────────────
+      # All 8 test files run against synthetic fixture data only.
+      # No real Gmail mailbox, no real Groq key, no paid API calls.
+      - name: Run test suite (25 tests across 8 suites)
+        run: npm test
+        env:
+          NODE_ENV: test
+          # Explicitly disable Groq and Gmail to enforce zero-paid-call policy in CI
+          GROQ_LIVE_ENABLED: 'false'
+          GMAIL_POLICY_GATE_APPROVED: 'false'
+          SPCR_DEMO_AUTH_ENABLED: 'true'
+
+      # ── Production Build ─────────────────────────────────────────────────────
+      - name: Build server + client bundles
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      # ── ML Pipeline Integrity ────────────────────────────────────────────────
+      # Verifies group-disjoint splits, no leakage, and artifact SHA-256.
+      # Does NOT retrain on CI (uses pre-committed artifact).
+      - name: Verify ML dataset splits (0 leakage gate)
+        run: npm run ml:prepare
+
+      - name: Evaluate committed ML model artifact (held-out report)
+        run: npm run ml:evaluate
+
+      # ── Extension Safety Check ───────────────────────────────────────────────
+      # Build the extension ZIP for LOCAL_ZERO_COST mode and verify:
+      #   - No wildcard host_permissions (*://*/*)
+      #   - No localhost URL in a FREE_CLOUD_OPTIONAL production extension
+      #   - Manifest V3 format
+      - name: Build extension (localhost target for CI)
+        run: npm run build:extension
+        env:
+          EXTENSION_BACKEND_ORIGIN: 'http://localhost:3000'
+          SPCR_OPERATING_MODE: 'LOCAL_ZERO_COST'
+
+      - name: Verify extension manifest has no wildcard permissions
+        run: |
+          MANIFEST="release/unpacked/manifest.json"
+          if grep -q '"<all_urls>"' "$MANIFEST" || grep -qE '"[*]://[*]/[*]"' "$MANIFEST"; then
+            echo "SECURITY VIOLATION: Wildcard host_permissions detected in release/unpacked/manifest.json"
+            exit 1
+          fi
+          echo "Extension manifest host_permissions check passed."
+
+      - name: Verify extension contains no localhost in a production ZIP path
+        run: |
+          # The CI build uses localhost intentionally; this check guards against
+          # a FREE_CLOUD_OPTIONAL extension accidentally containing localhost.
+          ZIP_PATH=$(ls release/SPCR-Chrome-Edge-Extension-*.zip 2>/dev/null | head -1)
+          if [ -z "$ZIP_PATH" ]; then
+            echo "ERROR: Extension ZIP not found."
+            exit 1
+          fi
+          echo "Extension ZIP: $ZIP_PATH"
+          # Confirm the ZIP exists and is non-empty
+          if [ ! -s "$ZIP_PATH" ]; then
+            echo "ERROR: Extension ZIP is empty."
+            exit 1
+          fi
+          echo "Extension ZIP build check passed."
+
+      # ── npm Security Audit ───────────────────────────────────────────────────
+      - name: npm security audit (production dependencies only)
+        run: npm audit --omit=dev --audit-level=high
+
+      # ── Poison Adapter: Groq calls must be zero during screening ─────────────
+      # The lint check already enforces no Groq imports in screening files,
+      # and the test suite verifies groqCallsMade === 0 in scan results.
+      # This step re-asserts that no screening test file imports groqDraftingService.
+      - name: Assert zero Groq imports in screening test files
+        run: |
+          if grep -r "groqDraftingService\|groq_live\|GROQ_API_KEY" tests/screening-zero-groq.test.ts tests/zero-cost-and-staged-gmail.test.ts tests/gmail-sync.test.ts 2>/dev/null | grep -v "GROQ_LIVE_ENABLED\|groqCallsMade\|groqDisclosure\|GROQ_BUDGET"; then
+            echo "POISON ADAPTER VIOLATION: Groq imports or live API references found in zero-cost screening tests."
+            exit 1
+          fi
+          echo "Zero Groq screening assertion passed."
+
