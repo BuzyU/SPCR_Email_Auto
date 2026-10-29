@@ -4,7 +4,7 @@
 - **Selected Architecture:** `hybrid_minilm_tfidf_logreg` (`supervised_trained_classifier`)
 - **Dataset Version:** `spcr-curated-v1.0.0-258aca8317`
 - **Artifact SHA-256:** `815d8ff57f14835a39657613bc11c941f50921bda98e1a7f7d2f9ba340fb7347`
-- **Generated At:** `2026-10-29T18:55:02.285Z`
+- **Generated At:** `2026-10-29T20:18:01.309Z`
 - **Recurring Inference Cost:** **₹0** (100% local CPU execution; zero Groq / zero paid API dependence)
 
 ## 1. Uncalibrated Score Disclosure & Data Separation Statement

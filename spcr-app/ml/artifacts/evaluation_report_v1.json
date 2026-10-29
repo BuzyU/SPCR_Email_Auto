@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-29T18:55:02.285Z",
+  "generatedAt": "2026-10-29T20:18:01.309Z",
   "modelVersion": "spcr-email-intel-v1.0.0",
   "architectureType": "hybrid_minilm_tfidf_logreg",
   "datasetVersion": "spcr-curated-v1.0.0-258aca8317",

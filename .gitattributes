@@ -1,0 +1,19 @@
+# SPCR Git Attributes — Cross-Platform Line Ending Consistency
+# Ensures LF line endings across Windows, Linux CI, and Render environments.
+
+* text=auto eol=lf
+
+# Explicit binary files that must not undergo line conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.onnx binary
+*.pdf binary
+*.docx binary
+*.db binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

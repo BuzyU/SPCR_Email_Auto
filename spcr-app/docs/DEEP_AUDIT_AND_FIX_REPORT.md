@@ -68,10 +68,12 @@
 
 CI pipeline runs on `main` and `feat/cloud-extension-production` branches and all PRs to `main`:
 - `npm ci` → `typecheck` → `lint` → `npm test` → `build` → `ml:prepare` → `ml:evaluate`
-- Extension build with `EXTENSION_BACKEND_ORIGIN=http://localhost:3000` (CI safe default)
-- Manifest wildcard-permission check
+- Extension packaging and narrow MV3 permission validation
 - `npm audit --omit=dev --audit-level=high`
-- Poison adapter assertion: zero Groq imports in screening test files
+- Invariant 1: Extension manifest rejects wildcard permissions (`<all_urls>`, `*://*/*`)
+- Invariant 2: Scanner Groq calls fail (zero Groq imports in screening pipeline + runtime poison adapter assertion)
+- Invariant 3: False dispatch success fails (dishonest delivered status and all-skipped batches blocked)
+- Invariant 4: Artifact tampering fails safely (`ModelArtifactIntegrityError` HTTP 503)
 
 No secrets stored in CI. All checks use synthetic fixture data only.
 
