@@ -1,7 +1,7 @@
 // extension/background.ts
 var STORAGE_KEY = "spcr_pairing_state";
 function getDefaultBackendOrigin() {
-  return "https://spcr-web.onrender.com" ? "https://spcr-web.onrender.com" : "https://spcr-web.onrender.com";
+  return "http://localhost:3000" ? "http://localhost:3000" : "https://spcr-web.onrender.com";
 }
 function normalizeOrigin(raw) {
   const parsed = new URL(raw.trim());

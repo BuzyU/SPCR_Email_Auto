@@ -11,7 +11,7 @@
   ],
   "host_permissions": [
     "https://mail.google.com/*",
-    "https://spcr-web.onrender.com/*"
+    "http://localhost:3000/*"
   ],
   "background": {
     "service_worker": "background.js",

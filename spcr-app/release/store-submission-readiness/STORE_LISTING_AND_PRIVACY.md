@@ -12,7 +12,7 @@
 
 ## 2. Single-Purpose Statement
 
-SPCR Companion enables an authenticated institutional Training & Placement Officer to trigger zero-LLM placement-email screening, optional post-screen announcement formatting, and review navigation between Gmail Web (`https://mail.google.com`) and their self-hosted SPCR backend (`https://spcr-web.onrender.com`).
+SPCR Companion enables an authenticated institutional Training & Placement Officer to trigger zero-LLM placement-email screening, optional post-screen announcement formatting, and review navigation between Gmail Web (`https://mail.google.com`) and their self-hosted SPCR backend (`http://localhost:3000`).
 
 ## 3. Narrow Permission Justifications
 
@@ -21,7 +21,7 @@ SPCR Companion enables an authenticated institutional Training & Placement Offic
 | `storage` | Stores only the single-owner pairing bearer token, CSRF token, and SPCR backend origin in `chrome.storage.local`. Zero API keys or third-party credentials are stored. |
 | `activeTab` | Allows the toolbar popup fallback to check whether the officer's currently focused tab is `https://mail.google.com/*` and prefill the opened Gmail message ID on explicit click. |
 | `https://mail.google.com/*` | Renders the minimalist SPCR action bar (`Scan Email`, `Format Announcement with Groq`, `Review/Edit in SPCR`, `Choose WhatsApp Groups`) inside the officer's opened Gmail thread and reads the active `data-legacy-message-id`. Does NOT perform background Gmail polling. |
-| `https://spcr-web.onrender.com/*` | Communicates exclusively with the officer's own hosted SPCR server over HTTPS using the paired token. Wildcard `*://*/*` permissions are strictly prohibited and absent. |
+| `http://localhost:3000/*` | Communicates exclusively with the officer's own hosted SPCR server over HTTPS using the paired token. Wildcard `*://*/*` permissions are strictly prohibited and absent. |
 
 ## 4. Data-Use & Privacy Disclosure
 

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-29T15:15:23.001Z",
+  "generatedAt": "2026-10-29T16:36:06.546Z",
   "disclaimer": "SYNTHETIC & ADVERSARIAL FIXTURE METRICS ONLY — NOT REAL-WORLD PRODUCTION ACCURACY. Real mailbox distributions vary; low-confidence and ambiguous items route conservatively to Needs review.",
   "model": {
     "modelId": "Xenova/all-MiniLM-L6-v2",
