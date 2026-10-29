@@ -1,0 +1,9 @@
+{
+  "declaredBeforeFinalTestRunAt": "2026-10-29T23:18:00+05:30",
+  "policyNote": "Pre-declared acceptance thresholds locked BEFORE running held-out test evaluation per Mandatory Addendum Section 6. Curated/synthetic held-out results and real-inbox evaluation MUST be reported separately.",
+  "minimumHeldOutMacroF1": 0.80,
+  "minimumRelevantOpportunityRecall": 0.85,
+  "maximumSilentOpportunityDiscardRate": 0.02,
+  "maximumLeakageGroupsAcrossSplits": 0
+}
+

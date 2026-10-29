@@ -1,0 +1,75 @@
+{
+  "generatedAt": "2026-10-29T18:55:00.504Z",
+  "modelVersion": "spcr-email-intel-v1.0.0",
+  "datasetVersion": "spcr-curated-v1.0.0-258aca8317",
+  "splitCounts": {
+    "train": 155,
+    "val": 57,
+    "test": 63,
+    "extraApprovedFeedbackUsed": 0
+  },
+  "selectedArchitecture": "hybrid_minilm_tfidf_logreg",
+  "selectionRationale": "Selected \"hybrid_minilm_tfidf_logreg\" (lambda=0.003) because on the group-disjoint validation split it improved Macro-F1 from 0.8627 to 0.8972 (delta=+0.0345, silentDiscardRate=0.0000) while keeping local CPU latency at ~8.543 ms/email and ₹0 cost using the already-pinned local ONNX MiniLM cache.",
+  "candidates": [
+    {
+      "candidateName": "naive_majority",
+      "classifierKind": "deterministic_screening_rules",
+      "isTrainedSupervisedModel": false,
+      "selectedBestLambda": null,
+      "valMacroF1": 0.0115,
+      "valAccuracy": 0.0877,
+      "valMultiLabelMicroF1": 0.1034,
+      "valRelevantOpportunityRecall": 1,
+      "valSilentOpportunityDiscardRate": 0,
+      "avgCpuLatencyMsPerEmail": 0.001,
+      "estimatedResidentRamMb": 0.1,
+      "artifactSizeBytes": null,
+      "notes": "Predicts most frequent training label (relevant_opportunity) for every message. Fails completely on minority stages and silently discards real opportunities."
+    },
+    {
+      "candidateName": "minilm_exemplar_zero_shot",
+      "classifierKind": "exemplar_similarity_classifier",
+      "isTrainedSupervisedModel": false,
+      "selectedBestLambda": null,
+      "valMacroF1": 0.2963,
+      "valAccuracy": 0.386,
+      "valMultiLabelMicroF1": 0.3966,
+      "valRelevantOpportunityRecall": 0.7778,
+      "valSilentOpportunityDiscardRate": 0,
+      "avgCpuLatencyMsPerEmail": 4.719,
+      "estimatedResidentRamMb": 85,
+      "artifactSizeBytes": 23100000,
+      "notes": "Zero-shot cosine similarity over Xenova/all-MiniLM-L6-v2 embeddings against hand-written exemplars. Cannot separate all 14 fine-grained recruitment stages (e.g. OA vs interview follow-up vs offer vs rejection vs acknowledgement)."
+    },
+    {
+      "candidateName": "tfidf_ovr_logreg",
+      "classifierKind": "supervised_trained_classifier",
+      "isTrainedSupervisedModel": true,
+      "selectedBestLambda": 0.0025,
+      "valMacroF1": 0.8627,
+      "valAccuracy": 0.8596,
+      "valMultiLabelMicroF1": 0.8718,
+      "valRelevantOpportunityRecall": 1,
+      "valSilentOpportunityDiscardRate": 0,
+      "avgCpuLatencyMsPerEmail": 0.129,
+      "estimatedResidentRamMb": 8,
+      "artifactSizeBytes": 211065,
+      "notes": "Supervised L2 One-vs-Rest Logistic Regression over sublinear unigram/bigram zone TF-IDF + 42 thread/structural/missingness features. Sub-millisecond CPU inference, tiny memory footprint, 100% deterministic."
+    },
+    {
+      "candidateName": "hybrid_minilm_tfidf_logreg",
+      "classifierKind": "supervised_trained_classifier",
+      "isTrainedSupervisedModel": true,
+      "selectedBestLambda": 0.003,
+      "valMacroF1": 0.8972,
+      "valAccuracy": 0.8947,
+      "valMultiLabelMicroF1": 0.906,
+      "valRelevantOpportunityRecall": 1,
+      "valSilentOpportunityDiscardRate": 0,
+      "avgCpuLatencyMsPerEmail": 8.543,
+      "estimatedResidentRamMb": 92,
+      "artifactSizeBytes": 261332,
+      "notes": "Supervised L2 One-vs-Rest Logistic Regression combining 384-d Xenova/all-MiniLM-L6-v2 sentence embeddings + zone TF-IDF + 42 thread/structural/missingness features. Captures dense semantic paraphrases alongside exact lexical & thread cues."
+    }
+  ]
+}

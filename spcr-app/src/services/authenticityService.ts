@@ -27,6 +27,8 @@ export interface AuthenticityAssessment {
   isSuspicious: boolean;
 }
 
+export type SenderAuthenticityAssessment = AuthenticityAssessment;
+
 const FREE_WEBMAIL_DOMAINS = new Set([
   'gmail.com',
   'googlemail.com',
@@ -155,7 +157,7 @@ function hasDigitLetterTyposquat(domain: string): boolean {
  * NEVER fetches external URLs (zero SSRF) and NEVER outputs a false "Company verified" badge.
  */
 export async function assessSenderAuthenticity(
-  db: QueryExecutor,
+  db: QueryExecutor | null,
   input: {
     fromRaw: string;
     replyToRaw?: string | null;
@@ -266,7 +268,7 @@ export async function assessSenderAuthenticity(
 
   // Check owner-maintained sender notes (informational; not a blind allowlist)
   let knownSenderNote: { category: string; note: string } | null = null;
-  if (parsedFrom.email || fromDomain) {
+  if (db && (parsedFrom.email || fromDomain)) {
     const noteRes = await db.query<{ category: string; note: string }>(
       `SELECT category, note FROM sender_notes
        WHERE LOWER(domain_or_email) = $1 OR LOWER(domain_or_email) = $2

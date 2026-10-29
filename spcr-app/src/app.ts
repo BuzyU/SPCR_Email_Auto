@@ -15,9 +15,12 @@ import { RoutingAndDispatchService } from './services/routingAndDispatchService.
 import { LocalOnnxRecruitmentClassifier, PINNED_CLASSIFIER_SPEC } from './services/localClassifier.js';
 import { AttachmentExtractor, SharedAttachmentStorageService } from './services/attachmentService.js';
 import { ScreeningAndMatchingService } from './services/screeningAndMatchingService.js';
-import { GmailApiClient, GmailSyncService } from './services/gmailSyncService.js';
+import { GmailApiClient, GmailQuotaSafetyStopError, GmailSyncService } from './services/gmailSyncService.js';
 import { GroqAdapterError, GroqDraftingService, GroqTransport } from './services/groqDraftingService.js';
 import { RetentionAndPrivacyService } from './services/retentionAndPrivacyService.js';
+import { EmailIntelligenceService } from './services/emailIntelligenceService.js';
+import { RetrainingService } from './services/retrainingService.js';
+import { EMAIL_INTELLIGENCE_CATEGORIES, EmailIntelligenceCategoryZod, ModelArtifactIntegrityError } from './ml/schema.js';
 import { listAuditEvents, recordAuditEvent } from './services/auditService.js';
 import { seedSyntheticDemoWorkspace } from './fixtures/demoSeedFixtures.js';
 
@@ -35,6 +38,8 @@ export interface SpcrServiceContainer {
   authService: AuthService;
   routingService: RoutingAndDispatchService;
   classifier: LocalOnnxRecruitmentClassifier;
+  emailIntelligence: EmailIntelligenceService;
+  retrainingService: RetrainingService;
   attachmentStorage: SharedAttachmentStorageService;
   screener: ScreeningAndMatchingService;
   gmailSync: GmailSyncService;
@@ -49,6 +54,7 @@ export function createServiceContainer(params: {
   gmailApiClient?: GmailApiClient;
   groqTransport?: GroqTransport;
   attachmentExtractor?: AttachmentExtractor;
+  emailIntelligence?: EmailIntelligenceService;
 }): SpcrServiceContainer {
   const { config, db } = params;
   const authService = new AuthService(db, config, params.oidcVerifier);
@@ -57,9 +63,34 @@ export function createServiceContainer(params: {
     cacheDir: config.classifierCacheDir,
     offlineOnly: config.classifierOfflineOnly,
   });
+  const emailIntelligence =
+    params.emailIntelligence ||
+    new EmailIntelligenceService({
+      artifactPath: config.emailModelArtifactPath,
+      cacheDir: config.classifierCacheDir,
+      offlineOnly: config.classifierOfflineOnly,
+    });
+  const retrainingService = new RetrainingService(db, emailIntelligence, {
+    cacheDir: config.classifierCacheDir,
+    defaultArtifactPath: config.emailModelArtifactPath,
+  });
   const attachmentStorage = new SharedAttachmentStorageService(db, config, params.attachmentExtractor);
-  const screener = new ScreeningAndMatchingService(db, config, classifier, attachmentStorage, routingService);
-  const gmailSync = new GmailSyncService(db, config, authService, screener, params.gmailApiClient);
+  const screener = new ScreeningAndMatchingService(
+    db,
+    config,
+    classifier,
+    attachmentStorage,
+    routingService,
+    emailIntelligence
+  );
+  const gmailSync = new GmailSyncService(
+    db,
+    config,
+    authService,
+    screener,
+    params.gmailApiClient,
+    emailIntelligence
+  );
   const groqDrafting = new GroqDraftingService(db, config, routingService, params.groqTransport);
   const retentionService = new RetentionAndPrivacyService(db, config, gmailSync);
 
@@ -69,6 +100,8 @@ export function createServiceContainer(params: {
     authService,
     routingService,
     classifier,
+    emailIntelligence,
+    retrainingService,
     attachmentStorage,
     screener,
     gmailSync,
@@ -106,12 +139,37 @@ export function createSpcrApp(services: SpcrServiceContainer) {
     authService,
     routingService,
     classifier,
+    emailIntelligence,
+    retrainingService,
     attachmentStorage,
     screener,
     gmailSync,
     groqDrafting,
     retentionService,
   } = services;
+
+  function respondWithSafeError(res: Response, err: any, defaultErrorCode: string, defaultStatus = 400) {
+    if (err instanceof ModelArtifactIntegrityError) {
+      return res.status(503).json({
+        error: 'MODEL_ARTIFACT_INTEGRITY_ERROR',
+        reasonCode: err.reasonCode,
+        message: err.message,
+      });
+    }
+    if (err instanceof GmailQuotaSafetyStopError) {
+      return res.status(429).json({
+        error: err.code,
+        limitKind: err.limitKind,
+        unitsUsed: err.unitsUsed,
+        limitUnits: err.limitUnits,
+        message: err.message,
+      });
+    }
+    return res.status(defaultStatus).json({
+      error: defaultErrorCode,
+      message: err?.message || 'Operation failed.',
+    });
+  }
 
   const app = express();
   app.disable('x-powered-by');
@@ -200,9 +258,11 @@ export function createSpcrApp(services: SpcrServiceContainer) {
     next();
   });
 
+  const isLocalLoopbackBase =
+    config.appBaseUrl.startsWith('http://localhost') || config.appBaseUrl.startsWith('http://127.0.0.1');
   const cookieOptions = {
     httpOnly: true,
-    secure: config.nodeEnv === 'production' || config.appBaseUrl.startsWith('https://'),
+    secure: (config.nodeEnv === 'production' && !isLocalLoopbackBase) || config.appBaseUrl.startsWith('https://'),
     sameSite: 'lax' as const,
     path: '/',
     maxAge: 12 * 60 * 60 * 1000,
@@ -256,6 +316,9 @@ export function createSpcrApp(services: SpcrServiceContainer) {
         status: 'ok',
         product: 'SPCR',
         fullName: 'SPCR (Student Progression & Company Relation)',
+        operatingMode: config.operatingMode,
+        optionalGroqMode: config.optionalGroqMode,
+        recurringSoftwareCostInr: 0,
         dbConnected: true,
         timestamp: new Date().toISOString(),
       });
@@ -270,6 +333,9 @@ export function createSpcrApp(services: SpcrServiceContainer) {
       res.json({
         authenticated: Boolean(principal),
         configuredOwnerEmail: config.ownerEmail,
+        operatingMode: config.operatingMode,
+        optionalGroqMode: config.optionalGroqMode,
+        groqFreeTierOnly: config.groqFreeTierOnly,
         googleOidcConfigured: Boolean(config.googleClientId && config.googleClientSecret),
         demoAuthAvailable: config.demoAuthEnabled && config.nodeEnv !== 'production',
         principal: principal
@@ -430,33 +496,46 @@ export function createSpcrApp(services: SpcrServiceContainer) {
     try {
       const settings = await getSettings(db, config);
       const monitoring = await gmailSync.getMonitoringHealth();
+      const gmailQuota = await gmailSync.getQuotaStatus();
       const groqStatus = await groqDrafting.getBudgetAndProviderStatus();
       const storage = await attachmentStorage.getStorageStats();
+      const arch = emailIntelligence.getArchitectureBreakdown();
 
       const items = [
+        {
+          id: 'operating_mode_zero_cost',
+          name: `Zero-Cost Operating Mode (${config.operatingMode})`,
+          state: 'CONFIGURED',
+          consoleUrl: null,
+          whereEntered: 'Environment (SPCR_OPERATING_MODE=LOCAL_ZERO_COST | FREE_CLOUD_OPTIONAL)',
+          detail:
+            config.operatingMode === 'LOCAL_ZERO_COST'
+              ? 'Recurring third-party bill: INR 0. Runs locally on CPU + open-source PGlite/PostgreSQL. Sync runs while your local SPCR server is running (no payment method required).'
+              : 'FREE_CLOUD_OPTIONAL: Uses explicit free-tier hosting (plan: free). Subject to ~15m idle sleep (non-continuous when asleep) and 30-day free PostgreSQL expiry.',
+        },
         {
           id: 'owner_gate',
           name: 'SPCR Single-Owner Dashboard Gate (SPCR_OWNER_EMAIL)',
           state: config.ownerEmail ? 'CONFIGURED' : 'NEEDED — OWNER ACTION',
-          consoleUrl: 'https://dashboard.render.com/',
-          whereEntered: 'Render Dashboard -> Environment (SPCR_OWNER_EMAIL)',
+          consoleUrl: null,
+          whereEntered: 'Environment (.env or Free-Tier Host -> SPCR_OWNER_EMAIL)',
           detail: `Restricts dashboard sign-in strictly to ${config.ownerEmail}. Separate from Gmail mailbox OAuth.`,
         },
         {
           id: 'google_oauth_client',
-          name: 'Google Cloud OAuth 2.0 Web Client',
+          name: 'Google Cloud OAuth 2.0 Web Client (Free Standard Tier)',
           state: config.googleClientId && config.googleClientSecret ? 'CONFIGURED' : 'NEEDED — OWNER ACTION',
           consoleUrl: 'https://console.cloud.google.com/apis/credentials',
-          whereEntered: 'Render Environment (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)',
+          whereEntered: 'Environment (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)',
           callbackUris: {
             dashboardLoginOidc: config.googleOidcRedirectUri,
             gmailMailboxReadonly: config.googleGmailRedirectUri,
           },
-          detail: 'Enable Gmail API and register both exact HTTPS redirect URIs above.',
+          detail: 'Enable Gmail API (free tier) and register both exact redirect URIs above.',
         },
         {
           id: 'gmail_policy_gate',
-          name: 'Gmail Restricted-Scope (gmail.readonly) Policy & Mailbox Authorization',
+          name: 'Gmail Restricted-Scope (gmail.readonly) Policy, Staged Sync & Quota Guard',
           state: !config.gmailPolicyGateApproved
             ? 'BLOCKED BY POLICY'
             : monitoring.connection?.status === 'connected'
@@ -465,85 +544,119 @@ export function createSpcrApp(services: SpcrServiceContainer) {
                 ? 'INVALID'
                 : 'NEEDED — OWNER ACTION',
           consoleUrl: 'https://developers.google.com/workspace/gmail/api/auth/scopes',
-          whereEntered: 'Render Environment (GMAIL_POLICY_GATE_APPROVED=true only after CASA/Workspace verification review)',
-          detail: monitoring.policyGateExplanation,
+          whereEntered: 'Environment (GMAIL_POLICY_GATE_APPROVED=true after Workspace internal or CASA review)',
+          detail: `${monitoring.policyGateExplanation} Quota today: ${gmailQuota.unitsUsedToday}/${gmailQuota.dailyLimitUnits} units (${gmailQuota.attachmentsSkippedByStagingToday} attachments skipped via staged pre-screen).`,
         },
         {
           id: 'local_classifier',
-          name: `Self-Hosted Screening Classifier (${PINNED_CLASSIFIER_SPEC.modelId})`,
+          name: `Local Supervised Email Intelligence Model (${arch.loadedModelVersion || 'spcr-email-intel-v1.0.0'})`,
           state: 'CONFIGURED',
           consoleUrl: 'https://huggingface.co/Xenova/all-MiniLM-L6-v2',
-          whereEntered: 'Bundled/cached locally on server (.models_cache) with pinned SHA-256 checksums',
-          detail: 'Runs 100% locally on CPU. Makes zero Groq or external API calls.',
+          whereEntered: 'Local ml/artifacts/recruitment_email_model_v1.json + .models_cache (SHA-256 verified)',
+          detail: `Supervised 14-label multi-label classifier (${arch.loadedArchitectureType || 'hybrid_minilm_tfidf_logreg'}) + deterministic structured extraction. Runs 100% locally on CPU with INR 0 API cost.`,
         },
         {
           id: 'groq_drafting',
-          name: 'Groq Post-Screen Extraction & Budget Gate',
+          name: `Optional Groq Announcement Polisher (${config.optionalGroqMode})`,
           state:
             !config.groqApiKey || !config.groqLiveEnabled
-              ? 'NEEDED — OWNER ACTION'
+              ? 'OPTIONAL — DISABLED'
               : !settings.groqDisclosureAcceptedAt || !settings.budgetConfirmedAt
                 ? 'NEEDED — OWNER ACTION'
                 : 'CONFIGURED',
           consoleUrl: 'https://console.groq.com/keys',
-          whereEntered: 'Render Environment (GROQ_API_KEY, GROQ_LIVE_ENABLED=true) + Dashboard Budget Settings',
-          detail: `Model: ${groqStatus.configuredModel}. Auto-drafting high-confidence candidates: ${
-            settings.autoDraftHighConfidence ? 'ON' : 'OFF (manual click required)'
+          whereEntered: 'Optional ONLY: GROQ_LIVE_ENABLED=false by default; never needed for classification or extraction',
+          detail: `Completely optional. Core classification, extraction, matching, review, and manual dispatch operate at 100% capability when DISABLED. Free-tier guard: ${
+            config.groqFreeTierOnly ? 'ON (INR 0 hard stop)' : 'Custom cap'
           }.`,
         },
         {
           id: 'postgresql_and_storage',
-          name: 'PostgreSQL & Shared Encrypted Attachment Storage',
+          name: 'Local PGlite / PostgreSQL & Encrypted Attachment Storage',
           state: 'CONFIGURED',
-          consoleUrl: 'https://dashboard.render.com/',
-          whereEntered: 'Render Managed PostgreSQL (DATABASE_URL + TOKEN_ENCRYPTION_KEY)',
+          consoleUrl: null,
+          whereEntered: 'DATABASE_URL (local pglite://./data/pglite by default; zero cost)',
           detail: `Driver: ${db.driverType}. Shared encrypted BYTEA blobs stored: ${storage.blobCount} (${storage.usedBytes} bytes).`,
         },
         {
           id: 'optional_providers',
-          name: 'Vercel / Supabase / OpenAI / Unofficial WhatsApp API',
+          name: 'Paid Cloud Hosting / Paid LLM APIs / Unofficial WhatsApp APIs',
           state: 'NOT NEEDED',
           consoleUrl: null,
-          whereEntered: 'Do not configure unless architecture is explicitly changed by owner',
-          detail: 'Render-first default uses Render PostgreSQL, Groq post-screen drafting, and manual officer WhatsApp dispatch.',
+          whereEntered: 'Prohibited by Zero-Cost Architecture Addendum',
+          detail: 'Zero paid APIs, zero paid schedulers, zero paid databases, and zero automated WhatsApp Web scripting.',
         },
       ];
 
-      res.json({ items, monitoring, groqStatus, storage });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  app.post('/api/integrations/safe-check', requireOwnerAuth, async (_req, res, next) => {
-    try {
-      await db.query('SELECT 1 AS ok');
-      await classifier.ensureLoaded();
-      const groqCheck = config.groqApiKey
-        ? await groqDrafting.runSafeConnectionCheck()
-        : { ok: false, modelAvailable: false, detail: 'GROQ_API_KEY not configured (mock/manual mode active).' };
-
       res.json({
-        checkedAt: new Date().toISOString(),
-        triggeredMailboxScan: false,
-        triggeredGroqCompletionSpend: false,
-        database: { ok: true, driver: db.driverType },
-        localClassifier: { ok: true, modelId: PINNED_CLASSIFIER_SPEC.modelId, checksumVerified: true },
-        googleOAuthConfig: {
-          credentialsPresent: Boolean(config.googleClientId && config.googleClientSecret),
-          policyGateApproved: config.gmailPolicyGateApproved,
-        },
-        groq: groqCheck,
+        operatingMode: config.operatingMode,
+        optionalGroqMode: config.optionalGroqMode,
+        recurringSoftwareCostInr: 0,
+        items,
+        monitoring,
+        gmailQuota,
+        groqStatus,
+        storage,
+        emailIntelligence: arch,
       });
     } catch (err) {
       next(err);
     }
   });
 
-  // Gmail OAuth & Monitoring Endpoints
+  app.post('/api/integrations/safe-check', requireOwnerAuth, async (_req, res) => {
+    try {
+      await db.query('SELECT 1 AS ok');
+      await classifier.ensureLoaded();
+      const loadedArtifact = await emailIntelligence.ensureLoaded();
+      const groqCheck =
+        config.groqLiveEnabled && config.groqApiKey
+          ? await groqDrafting.runSafeConnectionCheck()
+          : {
+              ok: false,
+              modelAvailable: false,
+              detail: 'OPTIONAL_GROQ is disabled by default (INR 0 local pipeline active).',
+            };
+
+      res.json({
+        checkedAt: new Date().toISOString(),
+        operatingMode: config.operatingMode,
+        optionalGroqMode: config.optionalGroqMode,
+        triggeredMailboxScan: false,
+        triggeredGroqCompletionSpend: false,
+        database: { ok: true, driver: db.driverType },
+        localClassifier: { ok: true, modelId: PINNED_CLASSIFIER_SPEC.modelId, checksumVerified: true },
+        emailIntelligenceModel: {
+          ok: true,
+          classifierKind: loadedArtifact.classifierKind,
+          architectureType: loadedArtifact.architectureType,
+          modelVersion: loadedArtifact.modelVersion,
+          datasetVersion: loadedArtifact.datasetVersion,
+          checksumVerified: true,
+        },
+        googleOAuthConfig: {
+          credentialsPresent: Boolean(config.googleClientId && config.googleClientSecret),
+          policyGateApproved: config.gmailPolicyGateApproved,
+        },
+        groq: groqCheck,
+      });
+    } catch (err: any) {
+      respondWithSafeError(res, err, 'SAFE_CHECK_FAILED', 500);
+    }
+  });
+
+  // Gmail OAuth, Quota & Staged Monitoring Endpoints
   app.get('/api/gmail/status', requireOwnerAuth, async (_req, res, next) => {
     try {
       res.json(await gmailSync.getMonitoringHealth());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/gmail/quota', requireOwnerAuth, async (_req, res, next) => {
+    try {
+      res.json(await gmailSync.getQuotaStatus());
     } catch (err) {
       next(err);
     }
@@ -592,7 +705,7 @@ export function createSpcrApp(services: SpcrServiceContainer) {
       const out = await gmailSync.pollNewMessages(req.principal!.email);
       res.json({ ...out, groqCallsMade: 0 });
     } catch (err: any) {
-      res.status(400).json({ error: 'GMAIL_POLL_FAILED', message: err.message });
+      respondWithSafeError(res, err, 'GMAIL_POLL_FAILED', 400);
     }
   });
 
@@ -605,10 +718,13 @@ export function createSpcrApp(services: SpcrServiceContainer) {
           .object({
             gmailThreadId: z.string().optional(),
             inReplyTo: z.string().optional(),
+            referencesHeader: z.string().optional(),
+            listUnsubscribeHeader: z.string().optional(),
+            isHtmlOnly: z.boolean().optional(),
             fromRaw: z.string().min(3),
             replyToRaw: z.string().optional(),
             authHeadersRaw: z.string().optional(),
-            subject: z.string().min(1),
+            subject: z.string().default(''),
             bodyText: z.string().default(''),
             attachments: z
               .array(
@@ -630,6 +746,9 @@ export function createSpcrApp(services: SpcrServiceContainer) {
             gmailMessageId: body.gmailMessageId,
             gmailThreadId: body.syntheticPayload.gmailThreadId || null,
             inReplyTo: body.syntheticPayload.inReplyTo || null,
+            referencesHeader: body.syntheticPayload.referencesHeader || null,
+            listUnsubscribeHeader: body.syntheticPayload.listUnsubscribeHeader || null,
+            isHtmlOnly: Boolean(body.syntheticPayload.isHtmlOnly),
             fromRaw: body.syntheticPayload.fromRaw,
             replyToRaw: body.syntheticPayload.replyToRaw || null,
             authHeadersRaw: body.syntheticPayload.authHeadersRaw || null,
@@ -647,20 +766,19 @@ export function createSpcrApp(services: SpcrServiceContainer) {
           req.principal!.email
         );
 
-        // Note: Manual Scan NEVER invokes Groq automatically even if autoDraftHighConfidence is ON;
-        // auto-drafting only applies to background queue processing if separately invoked.
+        // Manual Scan NEVER invokes Groq automatically even if autoDraftHighConfidence is ON.
         return res.json(result);
       }
 
       const result = await gmailSync.manualScanGmailMessageById(body.gmailMessageId, req.principal!.email);
       return res.json(result);
     } catch (err: any) {
-      res.status(400).json({ error: 'MANUAL_SCAN_FAILED', message: err.message });
+      respondWithSafeError(res, err, 'MANUAL_SCAN_FAILED', 400);
     }
   });
 
   // Synthetic Demo Seed Endpoint (Zero Credentials, Zero Groq Calls)
-  app.post('/api/demo/seed', requireOwnerAuth, async (req, res, next) => {
+  app.post('/api/demo/seed', requireOwnerAuth, async (req, res) => {
     try {
       const seeded = await seedSyntheticDemoWorkspace({
         db,
@@ -669,18 +787,21 @@ export function createSpcrApp(services: SpcrServiceContainer) {
         screener,
       });
       res.json(seeded);
-    } catch (err) {
-      next(err);
+    } catch (err: any) {
+      respondWithSafeError(res, err, 'DEMO_SEED_FAILED', 500);
     }
   });
 
-  // Screened Messages & Officer Feedback
+  // Screened Messages & Officer Feedback / Controlled Corrections
   app.get('/api/messages/screened', requireOwnerAuth, async (_req, res, next) => {
     try {
       const rows = await db.query<any>(
-        `SELECT sm.id, sm.gmail_message_id, sm.from_raw, sm.from_email, sm.from_domain, sm.subject,
+        `SELECT sm.id, sm.gmail_message_id, sm.gmail_thread_id, sm.from_raw, sm.from_email, sm.from_domain, sm.subject,
                 sm.received_at, sm.body_retained, sm.source_origin,
-                so.classification, so.confidence, so.margin, so.authenticity_label,
+                so.classification, so.primary_category, so.multi_labels_json,
+                so.uncertainty_outcome, so.uncertainty_reasons_json,
+                so.classifier_kind, so.model_version, so.structured_extraction_json,
+                so.confidence, so.margin, so.authenticity_label,
                 so.transport_auth_status, so.risk_flags_json, so.groq_calls_made,
                 so.scan_trigger, so.officer_feedback
          FROM source_messages sm
@@ -710,6 +831,126 @@ export function createSpcrApp(services: SpcrServiceContainer) {
     }
   });
 
+  // Section 7: Controlled User Correction & Retraining / Rollback Endpoints
+  app.post('/api/messages/:id/correction', requireOwnerAuth, async (req, res) => {
+    try {
+      const schema = z.object({
+        verdict: z.enum(['correct', 'incorrect', 'uncertain']),
+        correctedPrimaryCategory: EmailIntelligenceCategoryZod.optional(),
+        correctedMultiLabels: z.array(EmailIntelligenceCategoryZod).optional(),
+        officerNote: z.string().max(500).optional(),
+      });
+      const parsed = schema.parse(req.body);
+      const feedback = await retrainingService.submitUserCorrection({
+        sourceMessageId: req.params.id!,
+        verdict: parsed.verdict,
+        correctedPrimaryCategory: parsed.correctedPrimaryCategory,
+        correctedMultiLabels: parsed.correctedMultiLabels,
+        officerNote: parsed.officerNote,
+        actorEmail: req.principal!.email,
+      });
+      res.json({ feedback });
+    } catch (err: any) {
+      respondWithSafeError(res, err, 'CORRECTION_REJECTED', 400);
+    }
+  });
+
+  app.get('/api/ml/status', requireOwnerAuth, async (_req, res) => {
+    try {
+      await emailIntelligence.ensureLoaded();
+      await retrainingService.ensureInitializedRegistry();
+      const arch = emailIntelligence.getArchitectureBreakdown();
+      const registry = await retrainingService.listFeedbackAndRegistryStatus();
+      const evalPath = path.resolve(process.cwd(), 'ml', 'artifacts', 'evaluation_report_v1.json');
+      let evaluationSummary: any = null;
+      if (fs.existsSync(evalPath)) {
+        try {
+          const rawEval = JSON.parse(fs.readFileSync(evalPath, 'utf8'));
+          evaluationSummary = {
+            modelVersion: rawEval.modelVersion,
+            datasetVersion: rawEval.datasetVersion,
+            architectureType: rawEval.architectureType,
+            thresholdsAllPassed:
+              rawEval.thresholdCheckResults?.allThresholdsPassed ?? rawEval.thresholdChecks?.allPassed ?? null,
+            heldOutMacroF1: rawEval.heldOutTestEvaluation?.macroF1 ?? null,
+            heldOutAccuracy: rawEval.heldOutTestEvaluation?.accuracy ?? null,
+            relevantOpportunityRecall: rawEval.heldOutTestEvaluation?.relevantOpportunityRecall ?? null,
+            silentOpportunityDiscardRate: rawEval.heldOutTestEvaluation?.silentOpportunityDiscardRate ?? null,
+            calibrationDisclosure: rawEval.calibrationDisclosure ?? null,
+            realWorldInboxEvaluation:
+              rawEval.realInboxConsentedEvaluation ?? rawEval.realWorldInboxEvaluation ?? null,
+          };
+        } catch {
+          evaluationSummary = null;
+        }
+      }
+      res.json({
+        operatingMode: config.operatingMode,
+        optionalGroqMode: config.optionalGroqMode,
+        categories: EMAIL_INTELLIGENCE_CATEGORIES,
+        architecture: arch,
+        evaluationSummary,
+        ...registry,
+      });
+    } catch (err: any) {
+      respondWithSafeError(res, err, 'ML_STATUS_FAILED', 503);
+    }
+  });
+
+  app.get('/api/ml/feedback', requireOwnerAuth, async (_req, res, next) => {
+    try {
+      res.json(await retrainingService.listFeedbackAndRegistryStatus());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/api/ml/feedback/:id/review', requireOwnerAuth, async (req, res) => {
+    try {
+      const schema = z.object({
+        decision: z.enum(['approved_for_training', 'rejected']),
+      });
+      const parsed = schema.parse(req.body);
+      const updated = await retrainingService.reviewFeedbackExample({
+        feedbackId: req.params.id!,
+        decision: parsed.decision,
+        reviewerEmail: req.principal!.email,
+      });
+      res.json({ feedback: updated });
+    } catch (err: any) {
+      respondWithSafeError(res, err, 'FEEDBACK_REVIEW_FAILED', 400);
+    }
+  });
+
+  app.post('/api/ml/retrain', requireOwnerAuth, async (req, res) => {
+    try {
+      const compareHybridMiniLm =
+        typeof req.body?.compareHybridMiniLm === 'boolean' ? req.body.compareHybridMiniLm : true;
+      const autoActivate = typeof req.body?.autoActivate === 'boolean' ? req.body.autoActivate : true;
+      const out = await retrainingService.retrainFromApprovedFeedback({
+        actorEmail: req.principal!.email,
+        compareHybridMiniLm,
+        autoActivate,
+      });
+      res.json(out);
+    } catch (err: any) {
+      respondWithSafeError(res, err, 'ML_RETRAIN_FAILED', 400);
+    }
+  });
+
+  app.post('/api/ml/rollback', requireOwnerAuth, async (req, res) => {
+    try {
+      const targetVersion = typeof req.body?.targetVersion === 'string' ? req.body.targetVersion : undefined;
+      const out = await retrainingService.rollbackModelVersion({
+        targetVersion,
+        actorEmail: req.principal!.email,
+      });
+      res.json(out);
+    } catch (err: any) {
+      respondWithSafeError(res, err, 'ML_ROLLBACK_FAILED', 400);
+    }
+  });
+
   // Opportunities Inbox & Detail Endpoints
   app.get('/api/opportunities', requireOwnerAuth, async (_req, res, next) => {
     try {
@@ -736,9 +977,12 @@ export function createSpcrApp(services: SpcrServiceContainer) {
 
       const linksRes = await db.query<any>(
         `SELECT oml.id AS link_id, oml.link_state, oml.match_score, oml.evidence_json,
-                sm.id AS message_id, sm.gmail_message_id, sm.from_raw, sm.reply_to_email, sm.subject,
+                sm.id AS message_id, sm.gmail_message_id, sm.gmail_thread_id, sm.from_raw, sm.reply_to_email, sm.subject,
                 sm.received_at, sm.body_text, sm.snippet, sm.extracted_urls_json,
-                so.classification, so.confidence, so.margin, so.authenticity_label,
+                so.classification, so.primary_category, so.multi_labels_json,
+                so.uncertainty_outcome, so.uncertainty_reasons_json,
+                so.classifier_kind, so.model_version, so.structured_extraction_json,
+                so.confidence, so.margin, so.authenticity_label,
                 so.transport_auth_status, so.authenticity_signals_json, so.risk_flags_json, so.officer_feedback
          FROM opportunity_message_links oml
          JOIN source_messages sm ON sm.id = oml.source_message_id
@@ -1107,6 +1351,22 @@ export function createSpcrApp(services: SpcrServiceContainer) {
 
   // Global safe error handler (never echoes secrets or stack traces in responses)
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof ModelArtifactIntegrityError) {
+      return res.status(503).json({
+        error: 'MODEL_ARTIFACT_INTEGRITY_ERROR',
+        reasonCode: err.reasonCode,
+        message: err.message,
+      });
+    }
+    if (err instanceof GmailQuotaSafetyStopError) {
+      return res.status(429).json({
+        error: err.code,
+        limitKind: err.limitKind,
+        unitsUsed: err.unitsUsed,
+        limitUnits: err.limitUnits,
+        message: err.message,
+      });
+    }
     logger.error('unhandled_api_error', { message: err?.message || 'Unknown error' });
     res.status(500).json({
       error: 'INTERNAL_SERVER_ERROR',

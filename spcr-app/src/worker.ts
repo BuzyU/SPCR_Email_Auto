@@ -48,9 +48,10 @@ export async function executeWorkerCycleOnce(
   }
 
   // Stage B: Separate Post-Screen Auto-Drafting Queue (DEFAULT OFF!)
-  // Strictly isolated from Stage A; never touches uncertain or suspicious items!
+  // Strictly isolated from Stage A; never touches uncertain or suspicious items, and never runs when OPTIONAL_GROQ is DISABLED!
   const settings = await getSettings(services.db, services.config);
   if (
+    services.config.optionalGroqMode === 'OPTIONAL_GROQ' &&
     settings.autoDraftHighConfidence &&
     settings.groqDisclosureAcceptedAt &&
     settings.budgetConfirmedAt &&

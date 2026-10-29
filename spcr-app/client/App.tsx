@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { apiFetch, setClientCsrfToken } from './api.js';
 import {
   ChecklistAndConnectionsScreen,
+  EmailIntelligenceAndRetrainingScreen,
   GeneralSettingsPrivacyAndAuditScreen,
   GroqBudgetAndSettingsScreen,
   OverviewAndWizardScreen,
@@ -120,6 +121,12 @@ export function App() {
           <span className="spcr-brand-sub">Student Progression &amp; Company Relation — TPO Workstation</span>
         </div>
         <div className="spcr-row">
+          <span className="badge badge-ok">
+            [{authState.operatingMode || 'LOCAL_ZERO_COST'} | INR 0 RECURRING]
+          </span>
+          <span className="badge">
+            [GROQ: {authState.optionalGroqMode || 'DISABLED'}]
+          </span>
           <span className="mono" style={{ fontSize: 12 }}>
             Owner: {authState.principal.email} ({authState.principal.authMethod})
           </span>
@@ -138,6 +145,13 @@ export function App() {
             onClick={() => setActiveTab('inbox')}
           >
             Opportunity Inbox &amp; Review
+          </button>
+          <button
+            className="spcr-nav-btn"
+            aria-current={activeTab === 'ml' ? 'page' : undefined}
+            onClick={() => setActiveTab('ml')}
+          >
+            Email Intelligence &amp; Retraining
           </button>
           <button
             className="spcr-nav-btn"
@@ -174,7 +188,7 @@ export function App() {
             aria-current={activeTab === 'groq' ? 'page' : undefined}
             onClick={() => setActiveTab('groq')}
           >
-            Groq Model &amp; Budget Gate
+            Optional Groq &amp; Free-Tier Guard
           </button>
           <button
             className="spcr-nav-btn"
@@ -194,6 +208,7 @@ export function App() {
             />
           )}
           {activeTab === 'checklist' && <ChecklistAndConnectionsScreen />}
+          {activeTab === 'ml' && <EmailIntelligenceAndRetrainingScreen />}
           {activeTab === 'groq' && (
             <GroqBudgetAndSettingsScreen settings={settings} onSettingsUpdated={setSettings} />
           )}

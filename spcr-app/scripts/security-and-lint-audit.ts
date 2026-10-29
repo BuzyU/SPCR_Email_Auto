@@ -30,18 +30,37 @@ function walkFiles(dir: string, exts: string[]): string[] {
   return out;
 }
 
-// 1. Verify Zero Groq imports/URLs inside Independent Screening Pipeline
+// 1. Verify Zero Groq imports/URLs inside Independent Screening & Local ML Pipeline
 const screeningFiles = [
   'src/services/authenticityService.ts',
   'src/services/localClassifier.ts',
+  'src/services/emailIntelligenceService.ts',
+  'src/services/structuredEmailExtractor.ts',
+  'src/services/retrainingService.ts',
   'src/services/factExtractor.ts',
   'src/services/screeningAndMatchingService.ts',
+  'src/ml/trainerPipeline.ts',
 ];
 for (const rel of screeningFiles) {
   const full = path.join(rootDir, rel);
   const content = fs.readFileSync(full, 'utf8');
   if (/groqDraftingService|api\.groq\.com/i.test(content)) {
     violations.push(`[ZERO-GROQ VIOLATION] ${rel} references Groq service or endpoint.`);
+  }
+}
+
+// 1b. Verify Zero Paid Plans in render.yaml (Zero-Cost Architecture Addendum)
+for (const candidateRenderYaml of [
+  path.join(rootDir, 'render.yaml'),
+  path.join(rootDir, '..', 'render.yaml'),
+]) {
+  if (fs.existsSync(candidateRenderYaml)) {
+    const renderYaml = fs.readFileSync(candidateRenderYaml, 'utf8');
+    if (/^\s*plan:\s*(starter|standard|pro|basic-\S+)/im.test(renderYaml)) {
+      violations.push(
+        `[ZERO-COST VIOLATION] ${path.relative(rootDir, candidateRenderYaml)} declares a paid hosting or database plan.`
+      );
+    }
   }
 }
 

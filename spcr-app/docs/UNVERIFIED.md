@@ -1,64 +1,49 @@
-# SPCR Unresolved Launch Gates & Scope Boundaries (`UNVERIFIED.md`)
+# SPCR Unresolved Launch Gates, Free-Tier Limits & Honest Disclosures (`UNVERIFIED.md`)
 
-**Date:** 2026-10-29  
-**Status:** Mock/Synthetic Mode Ready & Verified; Live External Production Gates Pending Owner Action
+**Date:** 2026-10-30  
+**Status:** `LOCAL_ZERO_COST` Mode Verified End-to-End at ₹0 Recurring Cost; Live External Mailbox & Consented Real-Inbox Benchmark Pending Owner Action
 
-This document records compliance, cost, credential, and product-scope decisions that **cannot and must not be silently assumed** by the implementation. Live external integrations remain safely disabled behind explicit code gates until resolved.
+This document records compliance, real-mailbox evaluation, and free-tier operational limits that **cannot and must not be fabricated or silently assumed**.
 
 ---
 
-## 1. Google Restricted-Scope (`gmail.readonly`) & CASA Policy Gate
+## 1. Real-World Consented Mailbox Evaluation (`UNVERIFIED_NO_REAL_MAILBOX_DATA`)
+- **Current State:** `UNVERIFIED_NO_REAL_MAILBOX_DATA` (`0` real mailbox examples in `ml/data/real_inbox_consented_eval.jsonl`)
+- **Why Unresolved:**
+  - Per Mandatory Addendum Sections 2 & 6, synthetic fixtures and our curated 275-example anonymized corpus (`ml/data/curated_recruitment_corpus_v1.jsonl`, held-out Macro-F1 `0.9048`, Relevant Opportunity Recall `1.0000`, Silent Discard Rate `0.0000`) validate pipeline engineering and hard-case coverage, **not** live real-world distribution accuracy on the placement office's actual inbox.
+  - Confidence outputs from the L2 One-vs-Rest logistic classifier are explicitly marked `isCalibratedProbability: false` (uncalibrated ranking scores, not empirical probabilities).
+- **How to Verify Safely at ₹0 Cost:**
+  - Connect the placement mailbox locally (`LOCAL_ZERO_COST`), review incoming emails in SPCR, use the **Controlled Correction** buttons (`Correct` / `Uncertain` / `Correct to...`), approve verified PII-redacted examples in the **Email Intelligence & Retraining** tab, and evaluate on consented real-inbox examples via `npm run ml:evaluate`.
+
+## 2. Google Restricted-Scope (`gmail.readonly`) & CASA Policy Gate
 - **Current State:** `BLOCKED BY POLICY` (`GMAIL_POLICY_GATE_APPROVED=false` by default)
 - **Why Unresolved:**
-  - Reading placement emails and JD attachments requires `https://www.googleapis.com/auth/gmail.readonly`, which Google classifies as a **Restricted Scope**.
-  - Hosting SPCR on Render stores candidate Gmail metadata/content on remote servers and (when formatting is authorized) transmits selected candidate text to Groq.
-  - Under the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), an **External** OAuth app storing/transmitting restricted data generally requires OAuth App Verification and an annual **CASA (Cloud App Security Assessment)** (~$500+/year via an authorized lab), whereas an **Internal** Google Workspace app restricted to a college's own Google Workspace organization has different internal governance rules.
+  - Reading placement emails and JD attachments requires `https://www.googleapis.com/auth/gmail.readonly` (a **Restricted Scope**).
+  - Running SPCR in **`LOCAL_ZERO_COST`** mode on the TPO's own computer or as an **Internal** Google Workspace app inside the college's Google Workspace organization avoids remote third-party server storage and paid CASA lab assessments, whereas publishing an **External** cloud-hosted OAuth app storing restricted Gmail data generally triggers annual CASA assessment requirements (and 7-day refresh-token expiry while in Google OAuth "Testing" status).
 - **Required Before Live Mailbox Enablement:**
-  1. Owner confirms whether the TPO mailbox is a **college Google Workspace account** (eligible for Internal OAuth app type) or a **personal `@gmail.com` account** (External OAuth app).
-  2. Owner confirms OAuth verification / CASA applicability and approves the 90-day (or shorter) server retention window under institutional and Google policy.
-  3. Only after confirmation should `GMAIL_POLICY_GATE_APPROVED=true` be set in Render Environment settings.
+  1. Confirm whether SPCR will run in `LOCAL_ZERO_COST` mode / college-internal Google Workspace mode.
+  2. Register free Google Cloud OAuth 2.0 credentials (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) and set `GMAIL_POLICY_GATE_APPROVED=true` only after confirming organizational policy compliance.
 
-## 2. Single-Owner Dashboard Identity (`SPCR_OWNER_EMAIL`)
-- **Current State:** `NEEDED — OWNER ACTION`
-- **Why Unresolved:**
-  - Production dashboard login enforces strict single-owner Google OpenID Connect (`openid email profile`) verification against `SPCR_OWNER_EMAIL`.
-  - Local development/demo mode provides an explicit Demo TPO Sign-In (`SPCR_DEMO_AUTH_ENABLED=true`), which is **hard-disabled in code** whenever `NODE_ENV=production`.
-- **Required Before Live Hosting:**
-  - Owner sets the exact authorized officer email address in `SPCR_OWNER_EMAIL` and registers `GOOGLE_OIDC_REDIRECT_URI` (`https://<service>.onrender.com/api/auth/google/callback`) in Google Cloud Console.
+## 3. Deployment Distinction: `LOCAL_ZERO_COST` vs `FREE_CLOUD_OPTIONAL`
+- **`LOCAL_ZERO_COST` (Default, ₹0/month, Persistent Local Disk):**
+  - Runs on the owner's computer with embedded open-source `PGlite` (`pglite://./data/pglite`).
+  - Automatic sync (`LOCAL_SYNC_INTERVAL_SECONDS`) operates **only while the owner's computer and local SPCR server process are running**.
+- **`FREE_CLOUD_OPTIONAL` (`render.yaml`, ₹0/month Free Tier, Non-Continuous):**
+  - Uses Render `plan: free` Web Service + Render `plan: free` PostgreSQL (`0` paid worker services; no payment method required where eligible under Render's free tier).
+  - **Enforced Operational Disclosures:**
+    1. Free web instances spin down after ~15 minutes of inactivity and do **not** run continuous background Gmail polling while asleep.
+    2. Render Free PostgreSQL databases **expire and delete after 30 days** unless exported and recreated or pointed to a local/institutional database.
+    3. Free-tier terms are controlled by external providers and may change; SPCR treats ₹0 cost as an enforced operational constraint (`plan: free` lint check + hard quota safety stops), never an automatic upgrade to paid plans.
 
-## 3. Monthly Groq Budget Cap & Auto-Drafting Consent
-- **Current State:** `NEEDED — OWNER ACTION` (Groq Live Mode `OFF`, Budget `UNSET`, Auto-Drafting `OFF`)
-- **Why Unresolved:**
-  - The monthly AI spending cap has not been chosen by the owner.
-  - Per Section 5 & Section 10, SPCR refuses live Groq calls until:
-    1. `GROQ_API_KEY` is configured server-side in Render Environment settings (never pasted in chat),
-    2. The officer reviews current model pricing (`openai/gpt-oss-20b`: $0.075/1M input, $0.30/1M output) and acknowledges the Groq Data-Flow Disclosure (including Groq's up-to-30-day reliability/abuse log policy unless opted out in Groq Data Controls), and
-    3. The officer enters and confirms an explicit monthly budget cap in the SPCR Dashboard.
-  - `Automatically format high-confidence placement candidates with Groq` defaults to **OFF** and requires a separate affirmative opt-in toggle.
+## 4. Optional Groq Enhancement (`GROQ_LIVE_ENABLED=false` Default)
+- **Current State:** `DISABLED` by default (`OPTIONAL_GROQ` is completely unnecessary for classification, structured extraction, thread stage tracking, matching, or manual WhatsApp dispatch).
+- **Zero-Cost Safeguard:** Even if the owner optionally supplies a free Groq API key (`GROQ_FREE_TIER_ONLY=true`), SPCR halts requests at `25 RPM` / `900 RPD` / `180,000 TPD` (`GROQ_FREE_TIER_SAFETY_STOP`) and never switches to a paid provider or paid tier.
 
-## 4. Paid Render Infrastructure Approval (~$20 USD/month baseline)
-- **Current State:** `NEEDED — OWNER ACTION` (Not provisioned)
-- **Why Unresolved:**
-  - Continuous background monitoring without spin-down or 30-day database expiration requires paid Render tiers:
-    - Render Web Service (`Starter`): **$7/month**
-    - Render Background Worker (`Starter`): **$7/month**
-    - Render PostgreSQL (`Basic-256mb`, 1 GB): **$6/month**
-    - Total estimated Render baseline (Hobby workspace): **~$20 USD/month** (+ usage overages if expanded).
-  - No cloud resources have been created or billed. `render.yaml` is ready for owner-approved deployment.
-
-## 5. Browser Extension Distribution Path
-- **Current State:** `CONFIGURED FOR DEVELOPER MODE ZIP` (Store publication unapproved)
+## 5. Browser Extension Distribution (`₹0` Unpacked Developer Mode vs Store Fee)
+- **Current State:** `CONFIGURED FOR ₹0 DEVELOPER MODE UNPACKED INSTALL`
 - **Details:**
-  - Versioned unpacked build and `release/SPCR-Chrome-Edge-Extension-v1.0.0.zip` + SHA-256 checksum + `INSTALL_EXTENSION.md` are generated and verified.
-  - In stable Chrome/Edge, installing from a ZIP requires extracting the folder and loading it via `chrome://extensions` or `edge://extensions` (**Developer mode -> Load unpacked**).
-  - One-click store installation requires separate owner approval, developer account registration ($5 Chrome Web Store; free Edge Partner Center), exact Render production URL binding, and external store review.
+  - `release/unpacked/` and `release/SPCR-Chrome-Edge-Extension-v1.0.0.zip` install locally in Chrome (`chrome://extensions`) and Edge (`edge://extensions`) via **Developer mode -> Load unpacked** at **₹0 cost**.
+  - Microsoft Edge Add-ons Partner Center registration is `$0`, whereas Chrome Web Store public developer registration charges a `$5` one-time fee; therefore SPCR does **not** require Chrome Web Store registration.
 
 ## 6. Explicit v1 Product Scope Boundary ("Student Progression")
-- **Decision Recorded (Section 1):**
-  - Although **SPCR** stands for **Student Progression & Company Relation**, v1 scope is strictly bounded to placement-email discovery, authenticity/relevance screening, opportunity/JD matching, Groq announcement drafting, section/group routing, and guided manual WhatsApp dispatch.
-  - Student academic databases, progression tracking, and placement-outcome modules are **intentionally excluded from v1** unless explicitly specified by the owner for a future release.
-
-## 7. Local Screening Metrics Disclaimer
-- **Decision Recorded (Section 6.5):**
-  - Benchmark precision/recall/F1 metrics reported for the local self-hosted ONNX screening pipeline are measured on a **synthetic and adversarial evaluation fixture set**, not live college mailbox traffic. Real-world distribution drift is mitigated by routing uncertain/low-margin messages to `Needs review` rather than discarding them silently.
-
+- Student academic databases, progression analytics, and placement-outcome tracking remain intentionally excluded from v1 unless commissioned later.

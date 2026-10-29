@@ -124,7 +124,10 @@ export async function buildExtension(): Promise<{
   const storeMetaDir = path.join(releaseDir, 'store-submission-readiness');
 
   const backendOrigin = validateExtensionBackendOrigin(
-    process.env.EXTENSION_BACKEND_ORIGIN || 'https://spcr-web.onrender.com'
+    process.env.EXTENSION_BACKEND_ORIGIN ||
+      (process.env.SPCR_OPERATING_MODE === 'FREE_CLOUD_OPTIONAL'
+        ? 'https://spcr-web.onrender.com'
+        : 'http://localhost:3000')
   );
 
   fs.rmSync(unpackedDir, { recursive: true, force: true });

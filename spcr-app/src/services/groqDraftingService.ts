@@ -619,10 +619,14 @@ export class GroqDraftingService {
 
     const userPrompt = `<untrusted_source_material>\n${untrustedBundle}\n</untrusted_source_material>`;
 
-    // Gate 4: Concurrency-safe budget reservation BEFORE making the API call
+    // Gate 4: Concurrency-safe budget + free-tier safety reservation BEFORE making the API call
     const modelId = settings.groqModel || this.config.groqModel;
     const monthKey = new Date().toISOString().slice(0, 7);
     const est = this.estimateCostUsd(modelId, systemPrompt.length + userPrompt.length);
+
+    if (this.config.groqFreeTierOnly) {
+      await this.enforceFreeTierQuotaOrThrow(est.estimatedInputTokens + est.estimatedOutputTokens);
+    }
 
     const ledgerId = await this.reserveBudgetOrThrow({
       monthKey,
@@ -697,6 +701,10 @@ export class GroqDraftingService {
       modelId,
       usdToInrRate: settings.usdToInrRate,
     });
+
+    if (this.config.groqFreeTierOnly) {
+      await this.recordFreeTierTokensUsed(transportResp.promptTokens + transportResp.completionTokens);
+    }
 
     const data = zodParsed.data;
     const reviewFlags = new Set<string>(data.review_flags);
@@ -793,33 +801,116 @@ export class GroqDraftingService {
     });
   }
 
+  private async enforceFreeTierQuotaOrThrow(estimatedTotalTokens: number): Promise<void> {
+    const nowIso = new Date().toISOString();
+    const dayKey = nowIso.slice(0, 10);
+    const minuteBucket = nowIso.slice(0, 16); // YYYY-MM-DDTHH:MM
+    const MAX_FREE_RPM_SAFE = 25;
+    const MAX_FREE_RPD_SAFE = 900;
+    const MAX_FREE_TPD_SAFE = 180_000;
+
+    await this.db.withTransaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO groq_free_tier_usage (day_key, requests_count, tokens_used, minute_bucket, minute_requests_count)
+         VALUES ($1, 0, 0, $2, 0)
+         ON CONFLICT (day_key) DO NOTHING`,
+        [dayKey, minuteBucket]
+      );
+      const res = await tx.query<{
+        requests_count: number;
+        tokens_used: number;
+        minute_bucket: string | null;
+        minute_requests_count: number;
+      }>('SELECT * FROM groq_free_tier_usage WHERE day_key = $1 FOR UPDATE', [dayKey]);
+      const row = res.rows[0]!;
+      const curMinCount = row.minute_bucket === minuteBucket ? Number(row.minute_requests_count) : 0;
+
+      if (curMinCount + 1 > MAX_FREE_RPM_SAFE) {
+        await tx.query(
+          `UPDATE groq_free_tier_usage SET hard_stop_triggered = TRUE, updated_at = NOW() WHERE day_key = $1`,
+          [dayKey]
+        );
+        throw new GroqAdapterError(
+          `Zero-cost safety guard: OPTIONAL_GROQ free-tier per-minute ceiling reached (${curMinCount}/${MAX_FREE_RPM_SAFE} req/min). Deferring request; edit local draft directly.`,
+          'GROQ_BUDGET_CAP_REACHED',
+          429
+        );
+      }
+      if (Number(row.requests_count) + 1 > MAX_FREE_RPD_SAFE || Number(row.tokens_used) + estimatedTotalTokens > MAX_FREE_TPD_SAFE) {
+        await tx.query(
+          `UPDATE groq_free_tier_usage SET hard_stop_triggered = TRUE, updated_at = NOW() WHERE day_key = $1`,
+          [dayKey]
+        );
+        throw new GroqAdapterError(
+          `Zero-cost safety guard: OPTIONAL_GROQ daily free-tier ceiling reached (${row.requests_count}/${MAX_FREE_RPD_SAFE} req, ${row.tokens_used}/${MAX_FREE_TPD_SAFE} tokens). Core local SPCR continues at ₹0.`,
+          'GROQ_BUDGET_CAP_REACHED',
+          429
+        );
+      }
+
+      await tx.query(
+        `UPDATE groq_free_tier_usage
+         SET requests_count = requests_count + 1,
+             minute_bucket = $1,
+             minute_requests_count = $2,
+             updated_at = NOW()
+         WHERE day_key = $3`,
+        [minuteBucket, curMinCount + 1, dayKey]
+      );
+    });
+  }
+
+  private async recordFreeTierTokensUsed(actualTokens: number): Promise<void> {
+    if (actualTokens <= 0) return;
+    const dayKey = new Date().toISOString().slice(0, 10);
+    await this.db.query(
+      `UPDATE groq_free_tier_usage
+       SET tokens_used = tokens_used + $1, updated_at = NOW()
+       WHERE day_key = $2`,
+      [actualTokens, dayKey]
+    );
+  }
+
   async getBudgetAndProviderStatus(q: QueryExecutor = this.db) {
     const settings = await getSettings(q, this.config);
     const monthKey = new Date().toISOString().slice(0, 7);
+    const dayKey = new Date().toISOString().slice(0, 10);
     const budgetRes = await q.query<any>('SELECT * FROM groq_monthly_budgets WHERE month_key = $1', [monthKey]);
+    const freeRes = await q.query<any>('SELECT * FROM groq_free_tier_usage WHERE day_key = $1', [dayKey]);
     const ledgerRes = await q.query<any>(
       'SELECT * FROM groq_usage_ledger WHERE month_key = $1 ORDER BY created_at DESC LIMIT 30',
       [monthKey]
     );
 
     const budgetRow = budgetRes.rows[0] || null;
+    const freeRow = freeRes.rows[0] || null;
     const spentUsd = budgetRow ? Number(budgetRow.spent_usd) : 0;
     const reservedUsd = budgetRow ? Number(budgetRow.reserved_usd) : 0;
     const capUsd = budgetRow ? Number(budgetRow.cap_usd) : null;
 
     return {
+      optionalGroqMode: this.config.optionalGroqMode,
+      groqFreeTierOnly: this.config.groqFreeTierOnly,
       apiKeyConfigured: Boolean(this.config.groqApiKey),
       liveEnabled: Boolean(this.config.groqLiveEnabled && this.config.groqApiKey),
       configuredModel: settings.groqModel,
       verifiedModels: Object.values(VERIFIED_GROQ_MODELS),
       dataRetentionDisclosure: GROQ_DATA_RETENTION_DISCLOSURE,
       providerSpendLimitWarning:
-        'Groq Console Spend Limits update every 10–15 minutes and apply across your entire Groq organization. SPCR enforces an immediate per-request PostgreSQL budget reservation on top of provider limits.',
+        'OPTIONAL_GROQ is disabled by default (GROQ_LIVE_ENABLED=false) and completely unnecessary for email classification or extraction. When GROQ_FREE_TIER_ONLY=true, SPCR halts before exceeding safe free-tier ceilings and never switches to paid providers.',
       disclosureAcceptedAt: settings.groqDisclosureAcceptedAt,
       autoDraftHighConfidence: settings.autoDraftHighConfidence,
       monthlyBudgetInr: settings.monthlyBudgetInr,
       budgetConfirmedAt: settings.budgetConfirmedAt,
       usdToInrRate: settings.usdToInrRate,
+      freeTierSafetyToday: {
+        dayKey,
+        requestsUsed: Number(freeRow?.requests_count || 0),
+        requestsSafeMax: 900,
+        tokensUsed: Number(freeRow?.tokens_used || 0),
+        tokensSafeMax: 180_000,
+        hardStopTriggered: Boolean(freeRow?.hard_stop_triggered),
+      },
       currentMonth: {
         monthKey,
         capUsd,

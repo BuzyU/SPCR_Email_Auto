@@ -1,0 +1,45 @@
+{
+  "generatedAt": "2026-10-29T18:55:15.336Z",
+  "modelVersion": "spcr-email-intel-v1.1.2",
+  "datasetVersion": "spcr-curated-v1.0.0-258aca8317+feedback1",
+  "splitCounts": {
+    "train": 156,
+    "val": 57,
+    "test": 63,
+    "extraApprovedFeedbackUsed": 1
+  },
+  "selectedArchitecture": "tfidf_ovr_logreg",
+  "selectionRationale": "Selected \"tfidf_ovr_logreg\" (lambda=0.0025) with validation Macro-F1=0.8627 and silentDiscardRate=0.0000.",
+  "candidates": [
+    {
+      "candidateName": "naive_majority",
+      "classifierKind": "deterministic_screening_rules",
+      "isTrainedSupervisedModel": false,
+      "selectedBestLambda": null,
+      "valMacroF1": 0.0115,
+      "valAccuracy": 0.0877,
+      "valMultiLabelMicroF1": 0.1034,
+      "valRelevantOpportunityRecall": 1,
+      "valSilentOpportunityDiscardRate": 0,
+      "avgCpuLatencyMsPerEmail": 0.001,
+      "estimatedResidentRamMb": 0.1,
+      "artifactSizeBytes": null,
+      "notes": "Predicts most frequent training label (relevant_opportunity) for every message. Fails completely on minority stages and silently discards real opportunities."
+    },
+    {
+      "candidateName": "tfidf_ovr_logreg",
+      "classifierKind": "supervised_trained_classifier",
+      "isTrainedSupervisedModel": true,
+      "selectedBestLambda": 0.0025,
+      "valMacroF1": 0.8627,
+      "valAccuracy": 0.8596,
+      "valMultiLabelMicroF1": 0.8739,
+      "valRelevantOpportunityRecall": 1,
+      "valSilentOpportunityDiscardRate": 0,
+      "avgCpuLatencyMsPerEmail": 0.171,
+      "estimatedResidentRamMb": 8,
+      "artifactSizeBytes": 211979,
+      "notes": "Supervised L2 One-vs-Rest Logistic Regression over sublinear unigram/bigram zone TF-IDF + 42 thread/structural/missingness features. Sub-millisecond CPU inference, tiny memory footprint, 100% deterministic."
+    }
+  ]
+}

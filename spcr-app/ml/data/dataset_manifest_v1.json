@@ -1,0 +1,110 @@
+{
+  "datasetVersion": "spcr-curated-v1.0.0-258aca8317",
+  "generatedAt": "2026-10-29T18:54:48.053Z",
+  "corpusFileSha256": "258aca8317d6752c648950283155b606e8ffc89ba05a8940183f27acd874e195",
+  "totalCuratedExamples": 275,
+  "totalRealConsentedExamples": 0,
+  "missingAndQualityCounts": {
+    "emptyBodyCount": 2,
+    "veryShortBodyCount": 3,
+    "missingSubjectCount": 2,
+    "htmlOnlyCount": 2,
+    "malformedEncodingCount": 2,
+    "missingHandlingPolicy": "Retained intentionally (0 rows dropped): empty bodies, missing subjects, HTML-only bodies, and malformed MIME encodings are genuine inbox failure modes mapped to explicit binary indicator features so the classifier routes ambiguous/incomplete messages to uncertain / REVIEW_REQUIRED instead of crashing or silently discarding."
+  },
+  "splitCounts": {
+    "train": 155,
+    "val": 57,
+    "test": 63
+  },
+  "groupLeakageVerification": {
+    "sharedThreadIdsAcrossSplits": 0,
+    "sharedSenderOrgsAcrossSplits": 0
+  },
+  "perCategorySupport": {
+    "relevant_opportunity": {
+      "train": 15,
+      "val": 5,
+      "test": 5,
+      "total": 25
+    },
+    "recruiter_outreach": {
+      "train": 11,
+      "val": 4,
+      "test": 5,
+      "total": 20
+    },
+    "jd_or_details_followup": {
+      "train": 11,
+      "val": 4,
+      "test": 5,
+      "total": 20
+    },
+    "application_acknowledgement": {
+      "train": 11,
+      "val": 4,
+      "test": 4,
+      "total": 19
+    },
+    "screening_or_eligibility": {
+      "train": 11,
+      "val": 4,
+      "test": 5,
+      "total": 20
+    },
+    "online_assessment": {
+      "train": 11,
+      "val": 4,
+      "test": 5,
+      "total": 20
+    },
+    "interview_invitation": {
+      "train": 11,
+      "val": 4,
+      "test": 5,
+      "total": 20
+    },
+    "interview_followup": {
+      "train": 11,
+      "val": 4,
+      "test": 5,
+      "total": 20
+    },
+    "offer": {
+      "train": 11,
+      "val": 4,
+      "test": 4,
+      "total": 19
+    },
+    "rejection": {
+      "train": 11,
+      "val": 4,
+      "test": 4,
+      "total": 19
+    },
+    "job_alert_newsletter": {
+      "train": 10,
+      "val": 4,
+      "test": 4,
+      "total": 18
+    },
+    "unrelated_email": {
+      "train": 11,
+      "val": 4,
+      "test": 4,
+      "total": 19
+    },
+    "spam_or_scam": {
+      "train": 10,
+      "val": 4,
+      "test": 4,
+      "total": 18
+    },
+    "uncertain": {
+      "train": 10,
+      "val": 4,
+      "test": 4,
+      "total": 18
+    }
+  }
+}

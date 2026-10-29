@@ -1,6 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { apiFetch } from './api.js';
 
+const ALL_EMAIL_CATEGORIES = [
+  'relevant_opportunity',
+  'recruiter_outreach',
+  'jd_or_details_followup',
+  'application_acknowledgement',
+  'screening_or_eligibility',
+  'online_assessment',
+  'interview_invitation',
+  'interview_followup',
+  'offer',
+  'rejection',
+  'job_alert_newsletter',
+  'unrelated_email',
+  'spam_or_scam',
+  'uncertain',
+] as const;
+
 export function OpportunityInboxAndReviewScreen(props: {
   initialOpportunityId?: string | null;
   onOpenDispatchBatch: (batchId: string) => void;
@@ -18,6 +35,7 @@ export function OpportunityInboxAndReviewScreen(props: {
   const [manualScanSubject, setManualScanSubject] = useState('');
   const [manualScanFrom, setManualScanFrom] = useState('');
   const [manualScanBody, setManualScanBody] = useState('');
+  const [correctionCategoryByMsg, setCorrectionCategoryByMsg] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -256,7 +274,7 @@ export function OpportunityInboxAndReviewScreen(props: {
             <thead>
               <tr>
                 <th>Company &amp; Role</th>
-                <th>Status</th>
+                <th>Stage &amp; Status</th>
                 <th>Confidence Tier</th>
                 <th>Version &amp; Sources</th>
                 <th>Flags</th>
@@ -274,7 +292,10 @@ export function OpportunityInboxAndReviewScreen(props: {
                     <div>{o.role_title}</div>
                   </td>
                   <td>
-                    <span className="badge">[{o.status}]</span>
+                    <span className="badge">[{o.status}]</span>{' '}
+                    {o.recruitment_stage && (
+                      <span className="badge badge-ok">[STAGE: {o.recruitment_stage}]</span>
+                    )}
                   </td>
                   <td>
                     <span
@@ -326,17 +347,46 @@ export function OpportunityInboxAndReviewScreen(props: {
             </button>
           </div>
 
-          <h3>1. Linked &amp; Proposed Source Emails (Sender Authenticity Separate from Relevance)</h3>
+          <h3>1. Linked &amp; Proposed Source Emails (14-Label Intelligence, Evidence &amp; Separate Authenticity)</h3>
           {(oppDetail.messageLinks || []).map((ml: any) => (
             <div key={ml.link_id} className="notice">
               <div className="spcr-row" style={{ justifyContent: 'space-between' }}>
                 <div>
-                  <strong>{ml.subject}</strong> — <span className="mono">{ml.from_raw}</span>
+                  <strong>{ml.subject || '(Empty Subject)'}</strong> — <span className="mono">{ml.from_raw}</span>
                 </div>
                 <span className={`badge ${ml.link_state === 'confirmed' ? 'badge-ok' : 'badge-warn'}`}>
                   [LINK: {ml.link_state.toUpperCase()} ({ml.match_score})]
                 </span>
               </div>
+              <div className="spcr-row" style={{ marginTop: 6 }}>
+                <span className="badge badge-ok">
+                  [PRIMARY: {ml.primary_category || ml.classification}]
+                </span>
+                {Array.isArray(ml.multi_labels_json) && ml.multi_labels_json.length > 1 && (
+                  <span className="badge">
+                    [MULTI-LABELS: {ml.multi_labels_json.join(', ')}]
+                  </span>
+                )}
+                {ml.uncertainty_outcome && (
+                  <span
+                    className={`badge ${
+                      ml.uncertainty_outcome === 'HIGH_CONFIDENCE'
+                        ? 'badge-ok'
+                        : ml.uncertainty_outcome === 'LOW_CONFIDENCE_OR_SUSPICIOUS'
+                          ? 'badge-danger'
+                          : 'badge-warn'
+                    }`}
+                  >
+                    [{ml.uncertainty_outcome}]
+                  </span>
+                )}
+                {ml.model_version && <span className="mono" style={{ fontSize: 12 }}>Model: {ml.model_version}</span>}
+              </div>
+              {Array.isArray(ml.uncertainty_reasons_json) && ml.uncertainty_reasons_json.length > 0 && (
+                <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-muted)' }}>
+                  <strong>Uncertainty / Safety Reasons:</strong> {ml.uncertainty_reasons_json.join(' | ')}
+                </div>
+              )}
               <div style={{ marginTop: 4 }}>
                 <strong>Authenticity Assessment:</strong>{' '}
                 <span
@@ -346,11 +396,41 @@ export function OpportunityInboxAndReviewScreen(props: {
                 >
                   {ml.authenticity_label}
                 </span>{' '}
-                (Note: SPF/DKIM pass never proves company legitimacy.)
+                (Note: SPF/DKIM pass or company name in display text never proves company legitimacy.)
               </div>
               <div style={{ marginTop: 4 }}>
                 <strong>Match Evidence:</strong> {(ml.evidence_json || []).join(' | ')}
               </div>
+              {ml.structured_extraction_json && (
+                <details style={{ marginTop: 6 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+                    View Local Structured Extraction &amp; Verbatim Supporting Evidence
+                  </summary>
+                  <div className="mono" style={{ fontSize: 12, marginTop: 6 }}>
+                    <div>
+                      Company: {ml.structured_extraction_json.companyOrOrganization ?? 'null'} | Role:{' '}
+                      {ml.structured_extraction_json.jobTitleOrRole ?? 'null'} | Work Mode:{' '}
+                      {ml.structured_extraction_json.workMode ?? 'null'} | Employment:{' '}
+                      {ml.structured_extraction_json.employmentType ?? 'null'}
+                    </div>
+                    <div>
+                      Salary/Stipend: {ml.structured_extraction_json.salaryOrStipend ?? 'null'} | Deadline:{' '}
+                      {ml.structured_extraction_json.deadline ?? 'null'} | Stage:{' '}
+                      {ml.structured_extraction_json.recruitmentStage ?? 'null'} | Next Action:{' '}
+                      {ml.structured_extraction_json.requestedNextAction ?? 'null'}
+                    </div>
+                    {ml.structured_extraction_json.evidence &&
+                      Object.keys(ml.structured_extraction_json.evidence).length > 0 && (
+                        <div style={{ marginTop: 4 }}>
+                          <strong>Supporting Evidence Snippets:</strong>{' '}
+                          {Object.entries(ml.structured_extraction_json.evidence)
+                            .map(([k, v]: [string, any]) => `${k}: "${v?.verbatimExcerpt || ''}"`)
+                            .join(' | ')}
+                        </div>
+                      )}
+                  </div>
+                </details>
+              )}
               {ml.link_state === 'proposed' && (
                 <div className="spcr-row" style={{ marginTop: 8 }}>
                   <button
@@ -596,27 +676,122 @@ export function OpportunityInboxAndReviewScreen(props: {
 
       {screenedMessages.length > 0 && (
         <div className="spcr-card">
-          <h3>Recent Screened Emails Log (Proving Non-Candidate Body Minimization &amp; Zero Groq Calls)</h3>
+          <h3>Recent Screened Emails Log (14-Label Intelligence, Correction Controls &amp; Zero Groq Calls)</h3>
           <table className="spcr-table">
             <thead>
               <tr>
-                <th>Subject</th>
-                <th>From</th>
-                <th>Classification</th>
+                <th>Subject &amp; From</th>
+                <th>Primary &amp; Multi-Labels</th>
+                <th>Uncertainty Outcome</th>
                 <th>Body Retained?</th>
-                <th>Groq Calls</th>
+                <th>Controlled Correction (Staged PII-Redacted)</th>
               </tr>
             </thead>
             <tbody>
               {screenedMessages.slice(0, 15).map((m) => (
                 <tr key={m.id}>
-                  <td>{m.subject}</td>
-                  <td className="mono">{m.from_email}</td>
                   <td>
-                    <span className="badge">[{m.classification}]</span>
+                    <div>{m.subject || '(Empty Subject)'}</div>
+                    <div className="mono" style={{ fontSize: 12 }}>{m.from_email}</div>
+                  </td>
+                  <td>
+                    <span className="badge badge-ok">[{m.primary_category || m.classification}]</span>
+                    {Array.isArray(m.multi_labels_json) && m.multi_labels_json.length > 1 && (
+                      <div className="mono" style={{ fontSize: 11, marginTop: 2 }}>
+                        +{m.multi_labels_json.filter((x: string) => x !== m.primary_category).join(', ')}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <span
+                      className={`badge ${
+                        m.uncertainty_outcome === 'HIGH_CONFIDENCE'
+                          ? 'badge-ok'
+                          : m.uncertainty_outcome === 'LOW_CONFIDENCE_OR_SUSPICIOUS'
+                            ? 'badge-danger'
+                            : 'badge-warn'
+                      }`}
+                    >
+                      [{m.uncertainty_outcome || 'REVIEW_REQUIRED'}]
+                    </span>
                   </td>
                   <td>{m.body_retained ? 'Yes (Candidate)' : 'No (Discarded)'}</td>
-                  <td className="mono">{m.groq_calls_made}</td>
+                  <td>
+                    <div className="spcr-row" style={{ gap: 4 }}>
+                      <button
+                        className="btn"
+                        style={{ padding: '2px 6px', fontSize: 11 }}
+                        onClick={async () => {
+                          try {
+                            await apiFetch(`/api/messages/${m.id}/correction`, {
+                              method: 'POST',
+                              body: { verdict: 'correct' },
+                            });
+                            setBanner(`Recorded verified 'correct' label (${m.primary_category}) in staged training queue.`);
+                          } catch (e: any) {
+                            setError(e.message);
+                          }
+                        }}
+                      >
+                        Correct
+                      </button>
+                      <button
+                        className="btn"
+                        style={{ padding: '2px 6px', fontSize: 11 }}
+                        onClick={async () => {
+                          try {
+                            await apiFetch(`/api/messages/${m.id}/correction`, {
+                              method: 'POST',
+                              body: { verdict: 'uncertain' },
+                            });
+                            setBanner('Recorded uncertain label in staged training queue.');
+                          } catch (e: any) {
+                            setError(e.message);
+                          }
+                        }}
+                      >
+                        Uncertain
+                      </button>
+                      <select
+                        style={{ padding: '2px 4px', fontSize: 11 }}
+                        value={correctionCategoryByMsg[m.id] || ''}
+                        onChange={(e) =>
+                          setCorrectionCategoryByMsg({ ...correctionCategoryByMsg, [m.id]: e.target.value })
+                        }
+                      >
+                        <option value="">Correct to...</option>
+                        {ALL_EMAIL_CATEGORIES.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                      </select>
+                      {correctionCategoryByMsg[m.id] && (
+                        <button
+                          className="btn btn-primary"
+                          style={{ padding: '2px 6px', fontSize: 11 }}
+                          onClick={async () => {
+                            try {
+                              await apiFetch(`/api/messages/${m.id}/correction`, {
+                                method: 'POST',
+                                body: {
+                                  verdict: 'incorrect',
+                                  correctedPrimaryCategory: correctionCategoryByMsg[m.id],
+                                },
+                              });
+                              setBanner(
+                                `Submitted correction -> ${correctionCategoryByMsg[m.id]} (staged_unverified; approve in Email Intelligence tab before retraining).`
+                              );
+                            } catch (e: any) {
+                              setError(e.message);
+                            }
+                          }}
+                        >
+                          Save Correction
+                        </button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

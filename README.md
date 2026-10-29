@@ -1,43 +1,25 @@
-# SPCR_Email_Auto
+# SPCR — Student Progression & Company Relation (Zero-Cost Architecture)
 
-SPCR (Student Progression & Company Relation) Email & WhatsApp Automation Assistant for Training & Placement Officers (TPO).
+Single-owner placement-email intelligence, 14-category supervised local classification, validated structured extraction with verbatim supporting evidence, multi-turn Gmail thread stage tracking, and human-verified WhatsApp group dispatch for a college **Training & Placement Officer (TPO)** — engineered to run with a **₹0 recurring third-party software and API bill**.
 
-## Overview
+## Operating Modes (`₹0` Recurring Software & API Bill)
 
-SPCR automates the discovery, triage, and announcement drafting for campus recruitment and placement emails:
-- **Triage & Screening:** Independent local screening (zero external AI API calls for privacy & cost control) using lightweight local embeddings and deterministic rule-based verification.
-- **Fact Extraction & Drafting:** Post-screening structured opportunity extraction and WhatsApp announcement generation powered by Groq API under a strict owner-configured monthly budget cap.
-- **Human-in-the-Loop Dispatch:** Manual review, destination group selection, and guided one-click dispatch to WhatsApp Web (no unofficial APIs or DOM automation).
-- **Companion Extension:** Chrome & Edge Manifest V3 extension for one-click action directly inside Gmail Web.
+1. **`LOCAL_ZERO_COST` (Default):** 100% local CPU classification (`hybrid_minilm_tfidf_logreg` + `Xenova/all-MiniLM-L6-v2` Apache-2.0 ONNX), local deterministic structured extraction with verbatim evidence, and local embedded `PGlite` PostgreSQL storage (`pglite://./data/pglite`). Optional periodic Gmail sync runs while the owner's computer and local process are running. No payment method or paid API required.
+2. **`FREE_CLOUD_OPTIONAL` (`render.yaml` — `plan: free` only):** Free-tier web + database Blueprint (`0` paid worker services). Documented free-tier operational limits: ~15-minute idle spin-down (non-continuous background sync while asleep) and 30-day Render Free PostgreSQL expiration.
+3. **`OPTIONAL_GROQ` (`GROQ_LIVE_ENABLED=false` default):** Disabled by default and never required for classification, extraction, matching, correction, retraining, or manual WhatsApp dispatch. Bounded by hard pre-call free-tier safety stops (`25 RPM`, `900 RPD`, `180,000 TPD`) when optionally enabled.
 
-## Repository Structure
+## Quick Start (`LOCAL_ZERO_COST`)
 
-```
-SPCR/
-├── spcr-app/                               # Full-stack Node.js / React application
-│   ├── client/                             # React SPA owner dashboard
-│   ├── extension/                          # Chrome/Edge Manifest V3 extension
-│   ├── src/                                # Backend Express API & continuous worker
-│   ├── tests/                              # Vitest end-to-end and unit test suites
-│   ├── migrations/                         # PostgreSQL schema migrations
-│   ├── render.yaml                         # Render Blueprint definition (rootDir: spcr-app)
-│   └── package.json
-├── render.yaml                             # Root Render Blueprint pointing to spcr-app
-├── SPCR_AI3_Implementation_Prompt_Groq_Render_v2.md # Master specification
-├── SPCR_AI3_Audit_Findings_v2.md           # Security, architecture & privacy audit findings
-└── SPCR_Credential_Setup_Checklist_v2.md   # External credential configuration guide
-```
-
-## Quick Start (Local Run)
-
-See [`spcr-app/README.md`](spcr-app/README.md) for full instructions:
+See [`spcr-app/README.md`](spcr-app/README.md) and [`spcr-app/docs/MODEL_EVALUATION_REPORT.md`](spcr-app/docs/MODEL_EVALUATION_REPORT.md) for full details:
 
 ```powershell
 cd spcr-app
 npm install
 npm run preload:model
+npm run ml:prepare
+npm run ml:train
+npm run ml:evaluate
 npm run migrate
 npm run build
 npm start
 ```
-

@@ -41,20 +41,28 @@ export function OverviewAndWizardScreen(props: {
           are intentionally excluded from v1 unless specified by the owner.
         </div>
         {error && <div className="notice notice-danger">{error}</div>}
-        <h3>First-Run Data &amp; Privacy Disclosure</h3>
+        <h3>Zero-Cost Architecture &amp; Privacy Disclosure</h3>
         <ul>
           <li>
-            <strong>Zero-Groq Screening:</strong> Automatic mailbox monitoring and the manual <code>Scan Email</code>{' '}
-            action execute strictly on the hosted SPCR server using deterministic rules and a local CPU ONNX classifier
-            (<code>Xenova/all-MiniLM-L6-v2</code>). Zero emails are sent to Groq during scanning.
+            <strong>Hard Zero-Cost Operation (INR 0 Recurring Bill):</strong> SPCR operates in{' '}
+            <code>LOCAL_ZERO_COST</code> mode by default using local CPU inference and open-source PGlite/PostgreSQL
+            with zero paid APIs, zero paid hosting requirements, and no payment method required.
           </li>
           <li>
-            <strong>Data Minimization:</strong> Unrelated, personal, and newsletter messages discard body text
-            immediately. Only candidate opportunities retain source text and encrypted JD blobs (when policy allows).
+            <strong>Local Supervised Email Intelligence Model:</strong> Classification across 14 recruitment categories,
+            multi-label tagging, Gmail thread stage tracking, and structured extraction with verbatim supporting
+            evidence execute 100% locally on CPU (<code>spcr-email-intel-v1.0.0</code>). Zero emails are sent to Groq
+            during scanning or extraction.
           </li>
           <li>
-            <strong>External AI Gate:</strong> Post-screen Groq extraction/formatting remains disabled until you set and
-            confirm a monthly spending cap and acknowledge Groq&apos;s data-handling policy.
+            <strong>Staged Gmail Acquisition &amp; Data Minimization:</strong> SPCR inspects headers first, skips
+            attachment downloads on newsletters/unrelated/scam emails, discards body text for non-candidates, and halts
+            before exceeding safe Gmail API quotas.
+          </li>
+          <li>
+            <strong>Optional Groq Polisher (Disabled by Default):</strong> <code>GROQ_LIVE_ENABLED=false</code> by
+            default. Every classification, extraction, review, correction, and dispatch feature works completely without
+            Groq.
           </li>
           <li>
             <strong>Manual WhatsApp Integrity:</strong> SPCR never scripts <code>web.whatsapp.com</code> or claims
@@ -165,10 +173,12 @@ export function ChecklistAndConnectionsScreen() {
         </div>
         {safeCheckResult && (
           <div className="notice">
-            <strong>Safe Check Result ({new Date(safeCheckResult.checkedAt).toLocaleTimeString()}):</strong> Database:{' '}
-            <code>{safeCheckResult.database.driver}</code> OK | Local ONNX Classifier:{' '}
-            <code>{safeCheckResult.localClassifier.modelId}</code> Checksum Verified | Google OAuth Env Present:{' '}
-            {safeCheckResult.googleOAuthConfig.credentialsPresent ? 'Yes' : 'No'} | Groq Status:{' '}
+            <strong>Safe Check Result ({new Date(safeCheckResult.checkedAt).toLocaleTimeString()}):</strong> Mode:{' '}
+            <code>{safeCheckResult.operatingMode}</code> | Database: <code>{safeCheckResult.database.driver}</code> OK |
+            Supervised Email Model:{' '}
+            <code>{safeCheckResult.emailIntelligenceModel?.modelVersion || 'verified'}</code> (
+            <code>{safeCheckResult.emailIntelligenceModel?.architectureType}</code>) Checksum Verified | Google OAuth Env
+            Present: {safeCheckResult.googleOAuthConfig.credentialsPresent ? 'Yes' : 'No'} | Optional Groq:{' '}
             {safeCheckResult.groq.detail} (Zero mailbox scans or completion tokens used).
           </div>
         )}
@@ -257,7 +267,7 @@ export function ChecklistAndConnectionsScreen() {
         </div>
 
         <div className="spcr-card">
-          <h3>Background Monitoring &amp; Worker Health</h3>
+          <h3>Background Monitoring, Staged Sync &amp; Quota Health</h3>
           <p>
             <strong>Worker Lease Status:</strong>{' '}
             <span className={`badge ${mon?.workerActive ? 'badge-ok' : 'badge-warn'}`}>
@@ -271,6 +281,16 @@ export function ChecklistAndConnectionsScreen() {
           <p>
             <strong>History Cursor ID:</strong> <code className="mono">{mon?.connection?.last_history_id || 'None'}</code>
           </p>
+          {data?.gmailQuota && (
+            <p>
+              <strong>Gmail Quota Safety Guard ({data.gmailQuota.dayKey}):</strong>{' '}
+              <code>
+                {data.gmailQuota.unitsUsedToday} / {data.gmailQuota.dailyLimitUnits}
+              </code>{' '}
+              daily units (Per-sync max: <code>{data.gmailQuota.perSyncLimitUnits}</code>) | Attachments skipped by
+              staged pre-screen: <code>{data.gmailQuota.attachmentsSkippedByStagingToday}</code>
+            </p>
+          )}
           <p>
             <strong>Queued Candidates in Review:</strong> {mon?.queuedCandidatesCount ?? 0}
           </p>
@@ -278,7 +298,7 @@ export function ChecklistAndConnectionsScreen() {
             <div className="notice notice-danger">Last Sync Error: {mon.connection.last_error}</div>
           )}
           <button className="btn" disabled={!mon?.policyGateApproved} onClick={pollNow}>
-            Trigger Incremental Gmail Sync (Zero Groq Calls)
+            Trigger Staged Incremental Gmail Sync (Zero Groq Calls)
           </button>
         </div>
       </div>
@@ -806,4 +826,291 @@ export function GeneralSettingsPrivacyAndAuditScreen(props: {
     </div>
   );
 }
+
+export function EmailIntelligenceAndRetrainingScreen() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [banner, setBanner] = useState('');
+  const [error, setError] = useState('');
+
+  async function loadStatus() {
+    setLoading(true);
+    setError('');
+    try {
+      setData(await apiFetch('/api/ml/status'));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadStatus();
+  }, []);
+
+  async function reviewFeedback(id: string, decision: 'approved_for_training' | 'rejected') {
+    setError('');
+    setBanner('');
+    try {
+      await apiFetch(`/api/ml/feedback/${id}/review`, {
+        method: 'POST',
+        body: { decision },
+      });
+      setBanner(`Feedback ${id.slice(0, 10)} marked as ${decision}.`);
+      await loadStatus();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  async function triggerRetrain() {
+    setBusy(true);
+    setError('');
+    setBanner('');
+    try {
+      const res = await apiFetch('/api/ml/retrain', {
+        method: 'POST',
+        body: { compareHybridMiniLm: true, autoActivate: true },
+      });
+      setBanner(
+        `Retrained candidate ${res.newModelVersion} (${res.approvedFeedbackIncluded} approved corrections). Held-out Macro-F1: ${Number(res.heldOutMacroF1).toFixed(4)} | Regression gate passed: ${res.passedRegressionGate ? 'YES (Activated)' : 'NO (Kept previous active model)'}.`
+      );
+      await loadStatus();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function triggerRollback(targetVersion?: string) {
+    setBusy(true);
+    setError('');
+    setBanner('');
+    try {
+      const res = await apiFetch('/api/ml/rollback', {
+        method: 'POST',
+        body: targetVersion ? { targetVersion } : {},
+      });
+      setBanner(`Rolled active model back from ${res.previousActiveVersion} to ${res.rolledBackToVersion}.`);
+      await loadStatus();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="spcr-card">Loading local Email Intelligence model status...</div>;
+  }
+
+  const arch = data?.architecture;
+  const evalSum = data?.evaluationSummary;
+
+  return (
+    <div>
+      {error && <div className="notice notice-danger">{error}</div>}
+      {banner && <div className="notice">{banner}</div>}
+
+      <div className="spcr-card">
+        <h2>Local Supervised Recruitment Email Intelligence Model (INR 0 API Cost)</h2>
+        <p>
+          <strong>Active Classifier Kind:</strong>{' '}
+          <span className="badge badge-ok">[{arch?.activeProductionClassifierKind}]</span>{' '}
+          <strong>Model Version:</strong> <code>{arch?.loadedModelVersion}</code>{' '}
+          <strong>Architecture:</strong> <code>{arch?.loadedArchitectureType}</code>{' '}
+          <strong>Dataset:</strong> <code>{arch?.loadedDatasetVersion}</code>
+        </p>
+        <p className="mono" style={{ fontSize: 12 }}>
+          Artifact SHA-256: {arch?.artifactSha256}
+        </p>
+
+        <h3>Architectural Component Distinction (Mandatory Addendum Section 2)</h3>
+        <table className="spcr-table">
+          <thead>
+            <tr>
+              <th>Component Kind</th>
+              <th>Name</th>
+              <th>Trained for SPCR Labels?</th>
+              <th>Required for Core Screening?</th>
+              <th>Role in Pipeline</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.values(arch?.components || {}).map((c: any) => (
+              <tr key={c.kind}>
+                <td className="mono">{c.kind}</td>
+                <td><strong>{c.name}</strong></td>
+                <td>{c.isTrainedForSpcrLabels ? 'YES (Supervised 14-label)' : 'No'}</td>
+                <td>{!c.requiresExternalApi ? 'Local CPU (INR 0)' : 'Optional External (Default OFF)'}</td>
+                <td>{c.description}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {evalSum && (
+        <div className="spcr-card">
+          <h3>Held-Out Group-Disjoint Evaluation Summary (Curated Corpus vs Real-Inbox Separation)</h3>
+          <div className="spcr-row" style={{ gap: 16 }}>
+            <span className="badge badge-ok">
+              [Held-Out Macro-F1: {Number(evalSum.heldOutMacroF1).toFixed(4)}]
+            </span>
+            <span className="badge badge-ok">
+              [Held-Out Accuracy: {Number(evalSum.heldOutAccuracy).toFixed(4)}]
+            </span>
+            <span className="badge badge-ok">
+              [Relevant Opportunity Recall: {Number(evalSum.relevantOpportunityRecall).toFixed(4)}]
+            </span>
+            <span className="badge badge-ok">
+              [Silent Discard Rate: {Number(evalSum.silentOpportunityDiscardRate).toFixed(4)}]
+            </span>
+          </div>
+          {evalSum.calibrationDisclosure && (
+            <div className="notice" style={{ marginTop: 10 }}>
+              <strong>Confidence Score Calibration Disclosure:</strong>{' '}
+              <code>isCalibratedProbability: {String(evalSum.calibrationDisclosure.isCalibratedProbability)}</code> —{' '}
+              {evalSum.calibrationDisclosure.statement || evalSum.calibrationDisclosure.note}
+            </div>
+          )}
+          {evalSum.realWorldInboxEvaluation && (
+            <div className="notice notice-warn" style={{ marginTop: 8 }}>
+              <strong>Real-World Consented Mailbox Evaluation Status:</strong>{' '}
+              <code>[{evalSum.realWorldInboxEvaluation.status}]</code> —{' '}
+              {evalSum.realWorldInboxEvaluation.statement || evalSum.realWorldInboxEvaluation.note}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="spcr-grid-2">
+        <div className="spcr-card">
+          <div className="spcr-row" style={{ justifyContent: 'space-between' }}>
+            <h3>Controlled Correction Review Queue</h3>
+            <button className="btn btn-primary" disabled={busy} onClick={triggerRetrain}>
+              {busy ? 'Training & Running Regression Gate...' : 'Retrain Model from Approved Corrections'}
+            </button>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            Unverified predictions never silently retrain the production model. Officer corrections are PII-redacted and
+            staged as <code>staged_unverified</code> until explicitly approved below.
+          </p>
+          <p>
+            Staged: <strong>{data?.feedbackCounts?.staged_unverified ?? 0}</strong> | Approved for Training:{' '}
+            <strong>{data?.feedbackCounts?.approved_for_training ?? 0}</strong> | Rejected:{' '}
+            <strong>{data?.feedbackCounts?.rejected ?? 0}</strong>
+          </p>
+          {(data?.recentFeedback || []).length === 0 ? (
+            <div className="notice">No user corrections recorded yet. Use the Screened Emails table in Inbox to record corrections.</div>
+          ) : (
+            <table className="spcr-table">
+              <thead>
+                <tr>
+                  <th>Subject (Redacted)</th>
+                  <th>Verdict &amp; Target</th>
+                  <th>Status</th>
+                  <th>Review Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data?.recentFeedback || []).slice(0, 12).map((fb: any) => (
+                  <tr key={fb.id}>
+                    <td>{fb.redacted_subject || '(Empty)'}</td>
+                    <td className="mono">
+                      {fb.verdict}: {fb.predicted_primary_category} -&gt; {fb.corrected_primary_category}
+                    </td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          fb.review_status === 'approved_for_training'
+                            ? 'badge-ok'
+                            : fb.review_status === 'rejected'
+                              ? 'badge-danger'
+                              : 'badge-warn'
+                        }`}
+                      >
+                        [{fb.review_status}]
+                      </span>
+                    </td>
+                    <td>
+                      {fb.review_status === 'staged_unverified' && (
+                        <div className="spcr-row" style={{ gap: 4 }}>
+                          <button
+                            className="btn btn-primary"
+                            style={{ padding: '2px 6px', fontSize: 11 }}
+                            onClick={() => reviewFeedback(fb.id, 'approved_for_training')}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            className="btn btn-danger"
+                            style={{ padding: '2px 6px', fontSize: 11 }}
+                            onClick={() => reviewFeedback(fb.id, 'rejected')}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="spcr-card">
+          <div className="spcr-row" style={{ justifyContent: 'space-between' }}>
+            <h3>Model Version Registry &amp; Reversible Rollback</h3>
+            <button className="btn" disabled={busy} onClick={() => triggerRollback()}>
+              Rollback to Previous Version
+            </button>
+          </div>
+          <table className="spcr-table">
+            <thead>
+              <tr>
+                <th>Model Version</th>
+                <th>Architecture</th>
+                <th>Held-Out Macro-F1</th>
+                <th>State</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.modelVersions || []).map((mv: any) => (
+                <tr key={mv.model_version}>
+                  <td className="mono">{mv.model_version}</td>
+                  <td className="mono">{mv.architecture_summary}</td>
+                  <td>{Number(mv.held_out_macro_f1).toFixed(4)}</td>
+                  <td>
+                    <span className={`badge ${mv.is_active ? 'badge-ok' : ''}`}>
+                      {mv.is_active ? '[ACTIVE]' : '[INACTIVE]'}
+                    </span>
+                  </td>
+                  <td>
+                    {!mv.is_active && (
+                      <button
+                        className="btn"
+                        disabled={busy}
+                        style={{ padding: '2px 8px', fontSize: 11 }}
+                        onClick={() => triggerRollback(mv.model_version)}
+                      >
+                        Activate / Rollback Here
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 

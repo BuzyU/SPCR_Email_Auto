@@ -3,6 +3,17 @@ import { AppConfig } from '../config/env.js';
 import { randomId, sha256Hex } from '../utils/crypto.js';
 import { assessSenderAuthenticity, extractUrlsFromText } from './authenticityService.js';
 import { LocalOnnxRecruitmentClassifier, ScreeningClass } from './localClassifier.js';
+import { EmailIntelligenceService } from './emailIntelligenceService.js';
+import {
+  extractValidatedStructuredEmailInfo,
+  StructuredEmailExtraction,
+} from './structuredEmailExtractor.js';
+import {
+  CATEGORY_METADATA,
+  EMAIL_INTELLIGENCE_CATEGORIES,
+  EmailIntelligenceCategory,
+  UncertaintyOutcome,
+} from '../ml/schema.js';
 import { SharedAttachmentStorageService } from './attachmentService.js';
 import {
   extractFactsFromSingleSource,
@@ -29,6 +40,7 @@ export interface IncomingEmailMessage {
   rfcMessageId?: string | null;
   inReplyTo?: string | null;
   referencesHeader?: string | null;
+  listUnsubscribeHeader?: string | null;
   fromRaw: string;
   replyToRaw?: string | null;
   authHeadersRaw?: string | null;
@@ -36,6 +48,7 @@ export interface IncomingEmailMessage {
   receivedAt: string;
   snippet?: string | null;
   bodyText?: string | null;
+  isHtmlOnly?: boolean;
   attachments?: IncomingAttachmentPayload[];
   sourceOrigin: 'gmail_api' | 'synthetic_fixture';
 }
@@ -45,6 +58,13 @@ export interface ScreeningScanResult {
   sourceMessageId: string;
   gmailMessageId: string;
   classification: ScreeningClass;
+  primaryCategory: EmailIntelligenceCategory;
+  multiLabels: EmailIntelligenceCategory[];
+  uncertaintyOutcome: UncertaintyOutcome;
+  uncertaintyReasons: string[];
+  modelVersion: string;
+  recruitmentStage: string | null;
+  structuredExtraction: StructuredEmailExtraction | null;
   confidence: number;
   margin: number;
   authenticityLabel: string;
@@ -96,18 +116,63 @@ function rolesConflictExplicitly(roleA: string, roleB: string): { sameRole: bool
 }
 
 /**
- * Independent Email Screening & Opportunity/JD Matching Service.
+ * Independent Email Screening, 14-Category Multi-Label Intelligence & Opportunity/JD Matching Service.
  * ARCHITECTURAL GUARANTEE: Has ZERO reference to GroqAdapter or GROQ_API_KEY.
- * Every auto-scan and manual-scan execution makes strictly 0 Groq requests.
+ * Every auto-scan and manual-scan execution runs 100% locally on CPU and makes strictly 0 Groq requests.
  */
 export class ScreeningAndMatchingService {
+  private readonly emailIntelligence: EmailIntelligenceService;
+
   constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
     private readonly classifier: LocalOnnxRecruitmentClassifier,
     private readonly attachmentStorage: SharedAttachmentStorageService,
-    private readonly routingService: RoutingAndDispatchService
-  ) {}
+    private readonly routingService: RoutingAndDispatchService,
+    emailIntelligence?: EmailIntelligenceService
+  ) {
+    this.emailIntelligence =
+      emailIntelligence ||
+      new EmailIntelligenceService({
+        artifactPath: config.emailModelArtifactPath,
+        cacheDir: config.classifierCacheDir,
+        offlineOnly: config.classifierOfflineOnly,
+      });
+  }
+
+  private async loadPriorThreadCategories(msg: IncomingEmailMessage): Promise<EmailIntelligenceCategory[]> {
+    if (!msg.gmailThreadId && !msg.inReplyTo && !msg.referencesHeader) {
+      return [];
+    }
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (msg.gmailThreadId) {
+      params.push(msg.gmailThreadId);
+      clauses.push(`sm.gmail_thread_id = $${params.length}`);
+    }
+    const replyRefs = `${msg.inReplyTo || ''} ${msg.referencesHeader || ''}`.trim();
+    if (replyRefs) {
+      params.push(`%${replyRefs.slice(0, 120)}%`);
+      clauses.push(`(sm.rfc_message_id IS NOT NULL AND $${params.length} LIKE '%' || sm.rfc_message_id || '%')`);
+    }
+    if (clauses.length === 0) return [];
+
+    const res = await this.db.query<{ primary_category: string | null }>(
+      `SELECT so.primary_category
+       FROM source_messages sm
+       JOIN screening_outcomes so ON so.source_message_id = sm.id
+       WHERE (${clauses.join(' OR ')})
+       ORDER BY sm.received_at ASC
+       LIMIT 20`,
+      params
+    );
+
+    return res.rows
+      .map((r) => r.primary_category)
+      .filter((c): c is EmailIntelligenceCategory =>
+        Boolean(c && (EMAIL_INTELLIGENCE_CATEGORIES as readonly string[]).includes(c))
+      );
+  }
 
   async scanEmailMessage(
     msg: IncomingEmailMessage,
@@ -142,11 +207,19 @@ export class ScreeningAndMatchingService {
         [existingMsgId]
       );
       const out = outRes.rows[0];
+      const pCat = (out.primary_category || 'uncertain') as EmailIntelligenceCategory;
       return {
         alreadyProcessed: true,
         sourceMessageId: existingMsgId,
         gmailMessageId: msg.gmailMessageId,
         classification: out.classification,
+        primaryCategory: pCat,
+        multiLabels: out.multi_labels_json || [pCat],
+        uncertaintyOutcome: (out.uncertainty_outcome || 'REVIEW_REQUIRED') as UncertaintyOutcome,
+        uncertaintyReasons: out.uncertainty_reasons_json || [],
+        modelVersion: out.model_version || 'unknown',
+        recruitmentStage: CATEGORY_METADATA[pCat]?.recruitmentStage || null,
+        structuredExtraction: out.structured_extraction_json || null,
         confidence: Number(out.confidence),
         margin: Number(out.margin),
         authenticityLabel: out.authenticity_label,
@@ -161,7 +234,8 @@ export class ScreeningAndMatchingService {
     }
 
     const settings = await getSettings(this.db, this.config);
-    const inspectBody = (msg.bodyText || msg.snippet || '').trim();
+    const rawBodyOrSnippet = msg.bodyText ?? msg.snippet ?? '';
+    const inspectBody = rawBodyOrSnippet.trim();
     const extractedUrls = extractUrlsFromText(`${msg.subject}\n${inspectBody}`);
 
     // 2. Independent Sender Authenticity & Risk Evaluation (zero external URL fetches)
@@ -174,30 +248,40 @@ export class ScreeningAndMatchingService {
       urls: extractedUrls,
     });
 
-    // 3. Compact Self-Hosted Local ONNX Classifier + Deterministic Rules (ZERO Groq calls!)
+    // 3. Local Supervised 14-Category Multi-Label Classifier + Thread Context (ZERO Groq calls!)
+    // Throws `ModelArtifactIntegrityError` cleanly if model artifact is missing, malformed, or tampered.
     const attachmentFilenames = (msg.attachments || []).map((a) => a.filename);
-    const localPred = await this.classifier.classify(
+    const priorThreadCategories = await this.loadPriorThreadCategories(msg);
+
+    let mlPred = await this.emailIntelligence.classifyEmail(
       {
+        fromRaw: msg.fromRaw,
+        replyToRaw: msg.replyToRaw || null,
+        authHeadersRaw: msg.authHeadersRaw || null,
+        listUnsubscribeHeader: msg.listUnsubscribeHeader || null,
+        inReplyTo: msg.inReplyTo || null,
         subject: msg.subject,
-        bodyOrSnippet: inspectBody,
+        rawBody: rawBodyOrSnippet,
+        isHtmlOnly: msg.isHtmlOnly,
         attachmentFilenames,
-        inReplyTo: msg.inReplyTo,
+        priorThreadCategories,
         isSuspiciousSender: authAssessment.isSuspicious,
         riskFlags: authAssessment.riskFlags,
       },
       settings.classifierThresholds
     );
 
-    const isQueuedCandidate =
-      localPred.classification === 'candidate_opportunity' ||
-      localPred.classification === 'related_jd_followup' ||
-      localPred.classification === 'suspicious_needs_review' ||
-      localPred.classification === 'uncertain_needs_review';
+    const isRetainedRecruitmentOrReview =
+      mlPred.primaryCategory !== 'unrelated_email' && mlPred.primaryCategory !== 'job_alert_newsletter';
 
-    // 4. Persist inside transaction (non-candidates discard body_text & attachment blobs per Section 6.7 & 13!)
+    // 4. Persist inside transaction (non-relevant / newsletter messages discard body_text & attachment blobs!)
     return this.db.withTransaction(async (tx) => {
       const sourceMessageId = randomId('msg');
-      const retainBody = isQueuedCandidate && (msg.sourceOrigin === 'synthetic_fixture' || this.config.gmailPolicyGateApproved);
+      const retainBody =
+        isRetainedRecruitmentOrReview &&
+        (msg.sourceOrigin === 'synthetic_fixture' || this.config.gmailPolicyGateApproved);
+
+      const plainBodyForStorage = mlPred.representation.combinedPlainText || inspectBody;
 
       await tx.query(
         `INSERT INTO source_messages (
@@ -225,49 +309,18 @@ export class ScreeningAndMatchingService {
           authAssessment.replyToEmail,
           msg.subject,
           msg.receivedAt,
-          isQueuedCandidate ? (msg.snippet || inspectBody.slice(0, 240)) : null,
-          retainBody ? inspectBody : null,
+          isRetainedRecruitmentOrReview ? (msg.snippet || plainBodyForStorage.slice(0, 240)) : null,
+          retainBody ? plainBodyForStorage : null,
           retainBody,
-          isQueuedCandidate ? msg.authHeadersRaw || null : null,
-          JSON.stringify(isQueuedCandidate ? extractedUrls : []),
+          isRetainedRecruitmentOrReview ? msg.authHeadersRaw || null : null,
+          JSON.stringify(isRetainedRecruitmentOrReview ? extractedUrls : []),
           messageSha256,
           msg.sourceOrigin,
         ]
       );
 
-      const outcomeId = randomId('scr');
-      await tx.query(
-        `INSERT INTO screening_outcomes (
-          id, source_message_id, classification, confidence, margin,
-          model_scores_json, rule_signals_json, authenticity_label, transport_auth_status,
-          authenticity_signals_json, risk_flags_json, groq_calls_made, scan_trigger
-        ) VALUES (
-          $1, $2, $3, $4, $5,
-          $6::jsonb, $7::jsonb, $8, $9,
-          $10::jsonb, $11::jsonb, 0, $12
-        )`,
-        [
-          outcomeId,
-          sourceMessageId,
-          localPred.classification,
-          localPred.confidence,
-          localPred.margin,
-          JSON.stringify(localPred.modelScores),
-          JSON.stringify({ ...localPred.ruleSignals, explanation: localPred.explanation }),
-          authAssessment.label,
-          authAssessment.transportAuthStatus,
-          JSON.stringify(authAssessment.signals),
-          JSON.stringify(authAssessment.riskFlags),
-          trigger,
-        ]
-      );
-
-      let opportunityId: string | null = null;
-      let linkState: 'confirmed' | 'proposed' | null = null;
-
-      if (isQueuedCandidate) {
-        // Parse attachments first so JD text is available for opportunity matching & provenance!
-        const storedAttachments: any[] = [];
+      const storedAttachments: any[] = [];
+      if (isRetainedRecruitmentOrReview) {
         for (const att of msg.attachments || []) {
           const attRecord = await this.attachmentStorage.ingestAndStoreAttachment(tx, {
             sourceMessageId,
@@ -281,17 +334,104 @@ export class ScreeningAndMatchingService {
           });
           storedAttachments.push(attRecord);
         }
+      }
 
-        const combinedJdText = storedAttachments
-          .map((a) => a.extracted_text || '')
-          .filter(Boolean)
-          .join('\n');
+      const combinedJdText = storedAttachments
+        .map((a) => a.extracted_text || '')
+        .filter(Boolean)
+        .join('\n');
 
+      // If an empty/minimal email (e.g. "PFA") was flagged `uncertain` and its attachment parsed cleanly,
+      // re-evaluate classification incorporating the extracted attachment text (`Section 3`).
+      if (mlPred.primaryCategory === 'uncertain' && combinedJdText.trim().length >= 40) {
+        mlPred = await this.emailIntelligence.classifyEmail(
+          {
+            fromRaw: msg.fromRaw,
+            replyToRaw: msg.replyToRaw || null,
+            authHeadersRaw: msg.authHeadersRaw || null,
+            listUnsubscribeHeader: msg.listUnsubscribeHeader || null,
+            inReplyTo: msg.inReplyTo || null,
+            subject: msg.subject,
+            rawBody: `${rawBodyOrSnippet}\n\n${combinedJdText.slice(0, 3000)}`,
+            isHtmlOnly: msg.isHtmlOnly,
+            attachmentFilenames,
+            priorThreadCategories,
+            isSuspiciousSender: authAssessment.isSuspicious,
+            riskFlags: authAssessment.riskFlags,
+          },
+          settings.classifierThresholds
+        );
+      }
+
+      // Section 4: Validated Structured Extraction with Verbatim Supporting Evidence
+      const structuredExtraction = extractValidatedStructuredEmailInfo({
+        sourceMessageId,
+        gmailMessageId: msg.gmailMessageId,
+        gmailThreadId: msg.gmailThreadId || null,
+        subject: msg.subject,
+        bodyText: plainBodyForStorage,
+        attachmentTexts: storedAttachments.map((a) => ({
+          filename: a.filename,
+          parseStatus: a.parse_status,
+          extractedText: a.extracted_text || null,
+        })),
+        prediction: mlPred,
+        authenticity: authAssessment,
+      });
+
+      const outcomeId = randomId('scr');
+      await tx.query(
+        `INSERT INTO screening_outcomes (
+          id, source_message_id, classification, primary_category, multi_labels_json,
+          uncertainty_outcome, uncertainty_reasons_json, classifier_kind, model_version,
+          structured_extraction_json, confidence, margin,
+          model_scores_json, rule_signals_json, authenticity_label, transport_auth_status,
+          authenticity_signals_json, risk_flags_json, groq_calls_made, scan_trigger
+        ) VALUES (
+          $1, $2, $3, $4, $5::jsonb,
+          $6, $7::jsonb, $8, $9,
+          $10::jsonb, $11, $12,
+          $13::jsonb, $14::jsonb, $15, $16,
+          $17::jsonb, $18::jsonb, 0, $19
+        )`,
+        [
+          outcomeId,
+          sourceMessageId,
+          mlPred.legacyScreeningClass,
+          mlPred.primaryCategory,
+          JSON.stringify(mlPred.multiLabels),
+          mlPred.uncertaintyOutcome,
+          JSON.stringify(mlPred.uncertaintyReasons),
+          mlPred.classifierKind,
+          mlPred.modelVersion,
+          JSON.stringify(structuredExtraction),
+          mlPred.topConfidence,
+          mlPred.margin,
+          JSON.stringify(mlPred.categoryScores),
+          JSON.stringify({
+            structuralSignals: mlPred.representation.structuralSignals,
+            missingAndQualityIndicators: mlPred.representation.missingAndQualityIndicators,
+            explanation: mlPred.explanation,
+          }),
+          authAssessment.label,
+          authAssessment.transportAuthStatus,
+          JSON.stringify(authAssessment.signals),
+          JSON.stringify(authAssessment.riskFlags),
+          trigger,
+        ]
+      );
+
+      let opportunityId: string | null = null;
+      let linkState: 'confirmed' | 'proposed' | null = null;
+      const categoryMeta = CATEGORY_METADATA[mlPred.primaryCategory];
+      const recruitmentStage = categoryMeta.recruitmentStage;
+
+      if (isRetainedRecruitmentOrReview) {
         const inferred = inferCompanyAndRoleFromHeadersAndText({
           fromDisplayName: authAssessment.fromDisplayName,
           fromDomain: authAssessment.fromDomain,
           subject: msg.subject,
-          text: `${inspectBody}\n${combinedJdText}`,
+          text: `${plainBodyForStorage}\n${combinedJdText}`,
         });
 
         const matchOutcome = await this.findOrCreateOpportunityAndLink(tx, {
@@ -304,8 +444,11 @@ export class ScreeningAndMatchingService {
           subject: msg.subject,
           inferredCompany: inferred.companyName,
           inferredRole: inferred.roleTitle,
-          classification: localPred.classification,
-          confidenceTier: localPred.confidenceTier,
+          classification: mlPred.legacyScreeningClass,
+          primaryCategory: mlPred.primaryCategory,
+          recruitmentStage,
+          allowCreateNewOpportunity: categoryMeta.createsOrUpdatesOpportunity,
+          confidenceTier: mlPred.confidenceTier,
           isSuspicious: authAssessment.isSuspicious,
           riskFlags: authAssessment.riskFlags,
           storedAttachments,
@@ -319,10 +462,20 @@ export class ScreeningAndMatchingService {
           for (const att of storedAttachments) {
             await tx.query('UPDATE attachments SET opportunity_id = $1 WHERE id = $2', [opportunityId, att.id]);
           }
+          if (recruitmentStage) {
+            await tx.query(
+              `UPDATE opportunities
+               SET recruitment_stage = $1, latest_stage_updated_at = NOW(), updated_at = NOW()
+               WHERE id = $2`,
+              [recruitmentStage, opportunityId]
+            );
+          }
           await this.recomputeOpportunityFactsAndVersion(
             tx,
             opportunityId,
-            matchOutcome.isNewOpportunity ? 'Initial opportunity creation from screened message' : `Linked message "${msg.subject.slice(0, 80)}"`,
+            matchOutcome.isNewOpportunity
+              ? 'Initial opportunity creation from screened message'
+              : `Linked ${mlPred.primaryCategory} message "${msg.subject.slice(0, 80)}"`,
             !matchOutcome.isNewOpportunity,
             actorEmail
           );
@@ -336,8 +489,12 @@ export class ScreeningAndMatchingService {
         entityId: sourceMessageId,
         metadata: {
           trigger,
-          classification: localPred.classification,
-          confidence: localPred.confidence,
+          classification: mlPred.legacyScreeningClass,
+          primaryCategory: mlPred.primaryCategory,
+          multiLabels: mlPred.multiLabels,
+          uncertaintyOutcome: mlPred.uncertaintyOutcome,
+          modelVersion: mlPred.modelVersion,
+          confidence: mlPred.topConfidence,
           authenticityLabel: authAssessment.label,
           groqCallsMade: 0,
           opportunityId,
@@ -345,10 +502,18 @@ export class ScreeningAndMatchingService {
         },
       });
 
+      // Section 5: High relevance score alone NEVER authorizes external LLM transfer.
+      // Requires OPTIONAL_GROQ mode + explicit officer settings + HIGH_CONFIDENCE + passed transport auth + zero risk flags!
       const eligibleForAutoGroqQueue = Boolean(
-        settings.autoDraftHighConfidence &&
-          localPred.classification === 'candidate_opportunity' &&
-          localPred.confidenceTier === 'high' &&
+        this.config.optionalGroqMode === 'OPTIONAL_GROQ' &&
+          settings.autoDraftHighConfidence &&
+          settings.groqDisclosureAcceptedAt &&
+          settings.budgetConfirmedAt &&
+          settings.monthlyBudgetInr &&
+          settings.monthlyBudgetInr > 0 &&
+          (mlPred.primaryCategory === 'relevant_opportunity' || mlPred.primaryCategory === 'recruiter_outreach') &&
+          mlPred.uncertaintyOutcome === 'HIGH_CONFIDENCE' &&
+          authAssessment.transportAuthStatus === 'passed' &&
           !authAssessment.isSuspicious &&
           authAssessment.riskFlags.length === 0 &&
           opportunityId &&
@@ -359,9 +524,16 @@ export class ScreeningAndMatchingService {
         alreadyProcessed: false,
         sourceMessageId,
         gmailMessageId: msg.gmailMessageId,
-        classification: localPred.classification,
-        confidence: localPred.confidence,
-        margin: localPred.margin,
+        classification: mlPred.legacyScreeningClass,
+        primaryCategory: mlPred.primaryCategory,
+        multiLabels: mlPred.multiLabels,
+        uncertaintyOutcome: mlPred.uncertaintyOutcome,
+        uncertaintyReasons: mlPred.uncertaintyReasons,
+        modelVersion: mlPred.modelVersion,
+        recruitmentStage,
+        structuredExtraction,
+        confidence: mlPred.topConfidence,
+        margin: mlPred.margin,
         authenticityLabel: authAssessment.label,
         transportAuthStatus: authAssessment.transportAuthStatus,
         riskFlags: authAssessment.riskFlags,
@@ -375,11 +547,12 @@ export class ScreeningAndMatchingService {
   }
 
   /**
-   * Matches an incoming candidate/JD message against existing opportunities.
-   * RULES (Section 8):
+   * Matches an incoming candidate/JD/stage-update message against existing opportunities.
+   * RULES (Section 8 + Mandatory Addendum Section 3):
    * - Same company alone NEVER merges records!
    * - Two different jobs from one company stay separate!
-   * - Supports one-email details+JD, details->JD, JD->details, updated JD/deadline, and officer-confirmed proposals!
+   * - Stage updates (assessment, interview, follow-up, offer, rejection, acknowledgement) in an existing Gmail thread
+   *   update the parent opportunity's stage rather than creating duplicate unrelated opportunities!
    */
   private async findOrCreateOpportunityAndLink(
     tx: QueryExecutor,
@@ -394,13 +567,16 @@ export class ScreeningAndMatchingService {
       inferredCompany: string;
       inferredRole: string;
       classification: ScreeningClass;
+      primaryCategory: EmailIntelligenceCategory;
+      recruitmentStage: string | null;
+      allowCreateNewOpportunity: boolean;
       confidenceTier: 'high' | 'standard' | 'uncertain' | 'suspicious';
       isSuspicious: boolean;
       riskFlags: string[];
       storedAttachments: any[];
       actorEmail: string;
     }
-  ): Promise<{ opportunityId: string; linkState: 'confirmed' | 'proposed'; isNewOpportunity: boolean }> {
+  ): Promise<{ opportunityId: string | null; linkState: 'confirmed' | 'proposed' | null; isNewOpportunity: boolean }> {
     const candidatesRes = await tx.query<{
       id: string;
       company_name: string;
@@ -413,6 +589,16 @@ export class ScreeningAndMatchingService {
        ORDER BY updated_at DESC
        LIMIT 50`
     );
+
+    const isStageContinuationCategory =
+      params.primaryCategory === 'jd_or_details_followup' ||
+      params.primaryCategory === 'application_acknowledgement' ||
+      params.primaryCategory === 'screening_or_eligibility' ||
+      params.primaryCategory === 'online_assessment' ||
+      params.primaryCategory === 'interview_invitation' ||
+      params.primaryCategory === 'interview_followup' ||
+      params.primaryCategory === 'offer' ||
+      params.primaryCategory === 'rejection';
 
     let bestMatch: {
       oppId: string;
@@ -450,6 +636,10 @@ export class ScreeningAndMatchingService {
       if (sameThread) {
         score += 0.55;
         evidence.push(`Same Gmail thread (${params.gmailThreadId})`);
+        if (isStageContinuationCategory) {
+          score += 0.25;
+          evidence.push(`Thread lifecycle stage continuation (${params.primaryCategory})`);
+        }
       }
 
       const matchesReplyHeader = linkedMsgsRes.rows.some(
@@ -485,16 +675,19 @@ export class ScreeningAndMatchingService {
         score += 0.45;
         evidence.push(`Matching role title ("${params.inferredRole}" ~ "${opp.role_title}")`);
       } else if (
-        (params.classification === 'related_jd_followup' || opp.role_title === 'Not specified' || params.inferredRole === 'Not specified') &&
+        (params.classification === 'related_jd_followup' ||
+          isStageContinuationCategory ||
+          opp.role_title === 'Not specified' ||
+          params.inferredRole === 'Not specified') &&
         (sameDomain || sameCompany)
       ) {
-        // Details -> JD or JD -> Details across two separate threads within 14 days!
+        // Details -> JD, JD -> Details, or stage update across two separate threads within 14 days!
         const withinWindow = linkedMsgsRes.rows.some(
           (m) => Math.abs(new Date(params.receivedAt).getTime() - new Date(m.received_at).getTime()) <= 14 * 86_400_000
         );
         if (withinWindow) {
           score += 0.42;
-          evidence.push('Complementary details/JD follow-up within 14-day window');
+          evidence.push('Complementary details/JD/stage follow-up within 14-day window');
         }
       }
 
@@ -534,6 +727,14 @@ export class ScreeningAndMatchingService {
       };
     }
 
+    if (!params.allowCreateNewOpportunity) {
+      return {
+        opportunityId: null,
+        linkState: null,
+        isNewOpportunity: false,
+      };
+    }
+
     // Create a brand new Opportunity record
     const newOppId = randomId('opp');
     const reviewFlags: string[] = [...params.riskFlags];
@@ -555,8 +756,8 @@ export class ScreeningAndMatchingService {
     await tx.query(
       `INSERT INTO opportunities (
         id, company_name, role_title, opportunity_type, status, screening_confidence_tier,
-        current_version, material_hash, review_flags_json
-      ) VALUES ($1, $2, $3, 'Not specified', $4, $5, 1, $6, $7::jsonb)`,
+        current_version, material_hash, review_flags_json, recruitment_stage, latest_stage_updated_at
+      ) VALUES ($1, $2, $3, 'Not specified', $4, $5, 1, $6, $7::jsonb, $8, NOW())`,
       [
         newOppId,
         params.inferredCompany,
@@ -565,6 +766,7 @@ export class ScreeningAndMatchingService {
         params.confidenceTier,
         initHash,
         JSON.stringify(reviewFlags),
+        params.recruitmentStage || 'opportunity_identified',
       ]
     );
 

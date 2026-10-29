@@ -114,21 +114,22 @@
 - **SPCR Design Effect:**
   - Displayed transparently in the Budget & Provider Settings UI alongside an interactive monthly estimator (candidates/month × average tokens) and editable INR/USD cap before Groq can be enabled.
 
-## 11. Render Web Services, Background Workers, Environment Variables & PostgreSQL
+## 11. Zero-Cost Architecture & External-Service Free-Tier Dependency Matrix (Updated 2026-10-30)
 - **Official URLs:**
-  - https://render.com/docs/background-workers
-  - https://render.com/docs/environment-variables
-  - https://render.com/docs/postgresql
   - https://render.com/pricing
-- **Accessed:** 2026-10-29
-- **Verified Finding:**
-  - Render Background Workers run continuously without inbound HTTP ports and **have no Free tier** — Starter plan begins at **$7/month** (0.5 CPU, 512 MB RAM).
-  - Render Web Services require at least **Starter ($7/month)** to stay continuously running without Free-tier spin-down.
-  - Render PostgreSQL Free tier **expires and deletes after 30 days**; persistent paid PostgreSQL starts at **Basic-256mb ($6/month, 1 GB storage; +$0.30/GB/month expansion)** on Hobby ($0 workspace fee). Estimated baseline Render monthly total: **~$20 USD/month** ($7 Web + $7 Worker + $6 Postgres on Hobby workspace).
-  - Secrets are injected via Render Environment Variables (encrypted at rest) and `fromDatabase` connection linking.
-- **SPCR Design Effect:**
-  - `render.yaml` declares `spcr-web`, `spcr-worker`, and `spcr-db` cleanly, with **zero deployment triggered automatically** until the owner approves the ~$20 USD/month hosting cost.
-  - Worker concurrency safety is enforced via PostgreSQL `worker_leases` row locking so restarts or overlapping deploys never double-poll the mailbox.
+  - https://render.com/docs/free
+  - https://developers.google.com/workspace/gmail/api/reference/quota
+  - https://console.groq.com/docs/rate-limits
+- **Verified Finding & Enforced Zero-Cost Constraints (`₹0` Recurring Bill):**
+
+| External Service / Dependency | Role in SPCR | Required for Basic Operation? | Free-Tier Quota / Restrictions | Potential Billing Condition & SPCR Hard Safeguard |
+| --- | --- | --- | --- | --- |
+| **Local Supervised Email Model & ONNX Backbone** (`ml/artifacts/recruitment_email_model_v1.json` + `Xenova/all-MiniLM-L6-v2`) | 14-label classification, multi-label tagging, structured extraction | **Yes (100% Local CPU)** | Unlimited local CPU inference; ~92 MB RAM; Apache-2.0 & MIT licenses; cached in `.models_cache` | **₹0 always.** Zero network calls once preloaded (`CLASSIFIER_OFFLINE_ONLY=true` supported). |
+| **Embedded PGlite / Local PostgreSQL** (`@electric-sql/pglite`) | Primary database & AES-256-GCM encrypted attachment storage in `LOCAL_ZERO_COST` | **Yes (100% Local OSS)** | Limited only by local disk space (`MAX_TOTAL_ATTACHMENT_STORAGE_BYTES=262144000`) | **₹0 always.** Apache-2.0 / PostgreSQL open-source license; no cloud account or card needed. |
+| **Google Cloud OAuth 2.0 & Gmail API** (`openid email profile` + `gmail.readonly`) | Single-owner login & staged read-only mailbox sync | Optional (synthetic & manual paste modes work without it) | Standard Gmail API free quota: `1,000,000,000` quota units/day project-wide, `15,000` units/user/minute (`getProfile=1`, `history.list=2`, `messages.list=5`, `messages.get=2..5`, `attachments.get=5`). Unverified External Testing tokens expire after 7 days; remote cloud storage of restricted scopes can trigger paid CASA lab review. | Gmail API itself is free; DO NOT enable paid Cloud Pub/Sub or external CASA-triggering cloud relays unnecessarily. SPCR enforces **3-Stage Staged Acquisition** (skipping attachment downloads on newsletters/unrelated/scam mail) + hard daily/per-sync quota stop (`GMAIL_DAILY_QUOTA_SAFETY_LIMIT_UNITS=25000`, `GMAIL_PER_SYNC_MAX_QUOTA_UNITS=2500`). |
+| **Render Free Tier (`FREE_CLOUD_OPTIONAL` ONLY)** (`render.yaml`: `plan: free` web + `plan: free` Postgres) | Optional free cloud hosting | **No** (`LOCAL_ZERO_COST` is default) | Free Web Service: 750 free instance hours/month, spins down after ~15 min idle, ephemeral filesystem; Background Workers have **no** free tier; Free PostgreSQL: 1 GB max, **expires and deletes after 30 days**. | Upgrading to Starter/Basic plans bills `$6–$20+/month`. SPCR's `render.yaml` pins `plan: free` only (verified by `npm run lint`), omits paid workers, and documents non-continuous sleep & 30-day DB expiry. |
+| **Groq API (`OPTIONAL_GROQ`)** (`openai/gpt-oss-20b`) | Optional post-screen plain-text announcement polishing | **No** (`GROQ_LIVE_ENABLED=false` default) | Free tier: `30 RPM`, `1,000 RPD`, `8,000 TPM`, `200,000 TPD` (`₹0`, no card required for free tier). Developer tier bills per token if a payment method is added. | Adding billing in Groq Console enables paid token usage. SPCR keeps `GROQ_LIVE_ENABLED=false` by default and enforces `GROQ_FREE_TIER_ONLY=true` hard safety stops at `25 RPM` / `900 RPD` / `180,000 TPD` (`GROQ_FREE_TIER_SAFETY_STOP`), falling back to local deterministic templates with zero data loss. |
+| **Chrome / Edge Companion Extension** (`release/unpacked/`) | Manual Gmail action bar & popup | **No** (Dashboard covers 100% of workflows) | Local `Load unpacked` in Chrome & Edge is **₹0**; Edge Partner Center is `$0`; Chrome Web Store public developer registration costs `$5` one-time. | SPCR ships ready-to-load `release/unpacked/` (`₹0`) and never requires Chrome Web Store fee payment. |
 
 ## 12. Render Management API
 - **Official URL:** https://render.com/docs/api

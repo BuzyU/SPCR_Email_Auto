@@ -1,25 +1,34 @@
-# Render Blueprint for SPCR (Student Progression & Company Relation)
-# IMPORTANT: Do NOT deploy paid services until the owner explicitly approves hosting costs (~$20 USD/mo baseline)
-# and confirms Google OAuth / restricted-scope policy readiness.
+# Render Zero-Cost Demonstration Blueprint for SPCR (Student Progression & Company Relation)
+# OPERATING MODE: FREE_CLOUD_OPTIONAL (Recurring third-party software & API bill: ₹0 / $0)
+#
+# CRITICAL FREE-TIER LIMITATIONS (DOCUMENTED HONESTLY — DO NOT CLAIM 24/7 ALWAYS-ON CLOUD MONITORING):
+# 1. `spcr-web` uses Render `plan: free`: spins down after ~15 minutes of inactivity, cold-starts on HTTP request,
+#    and is capped at 750 free instance hours/month. It CANNOT perform continuous background Gmail polling while asleep.
+# 2. `spcr-db` uses Render PostgreSQL `plan: free`: limited storage (~1 GB) and EXPIRES / DELETES AFTER 30 DAYS unless recreated/exported.
+# 3. No paid Render Background Worker is provisioned in zero-cost mode (Render has no free tier for Background Workers).
+# 4. For reliable zero-cost persistent operation without 30-day DB expiry or idle sleep, run SPCR in `LOCAL_ZERO_COST` mode
+#    on the owner's workstation (`pglite://./.data/spcr-pg`).
 
 databases:
   - name: spcr-db
     databaseName: spcr
     user: spcr_app
-    plan: basic-256mb # Paid persistent tier ($6/mo; Free Postgres expires after 30 days)
+    plan: free # ₹0 / $0 Free tier — temporary demonstration DB (expires after 30 days on Render)
 
 services:
   - type: web
     name: spcr-web
     runtime: node
     rootDir: spcr-app
-    plan: starter # Paid tier ($7/mo) required to stay continuously awake without spin-down
+    plan: free # ₹0 / $0 Free tier — sleeps after ~15 min idle; manual / on-wake sync only
     buildCommand: npm ci && npm run preload:model && npm run build
     startCommand: npm run migrate && npm run start
     healthCheckPath: /api/health/public
     envVars:
       - key: NODE_ENV
         value: production
+      - key: SPCR_OPERATING_MODE
+        value: FREE_CLOUD_OPTIONAL
       - key: PORT
         value: "10000"
       - key: SPCR_DEMO_AUTH_ENABLED
@@ -28,10 +37,18 @@ services:
         value: "./.models_cache"
       - key: CLASSIFIER_OFFLINE_ONLY
         value: "true"
+      - key: EMAIL_MODEL_ARTIFACT_PATH
+        value: "./ml/artifacts/recruitment_email_model_v1.json"
       - key: GMAIL_POLICY_GATE_APPROVED
         value: "false"
+      - key: GMAIL_DAILY_QUOTA_SAFETY_LIMIT_UNITS
+        value: "10000"
+      - key: GMAIL_PER_SYNC_MAX_QUOTA_UNITS
+        value: "500"
       - key: GROQ_LIVE_ENABLED
         value: "false"
+      - key: GROQ_FREE_TIER_ONLY
+        value: "true"
       - key: GROQ_MODEL
         value: "openai/gpt-oss-20b"
       - key: DATABASE_URL
@@ -41,7 +58,7 @@ services:
       - key: SESSION_SECRET
         generateValue: true
       - key: TOKEN_ENCRYPTION_KEY
-        sync: false # Enter same generated 64-hex key in both spcr-web and spcr-worker via Render Dashboard
+        sync: false # Enter generated 64-hex key via Render Dashboard (never commit secrets)
       - key: WORKER_SHARED_SECRET
         sync: false
       - key: APP_BASE_URL
@@ -58,43 +75,3 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
-
-  - type: worker
-    name: spcr-worker
-    runtime: node
-    rootDir: spcr-app
-    plan: starter # Continuous background worker ($7/mo)
-    buildCommand: npm ci && npm run preload:model && npm run build
-    startCommand: npm run start:worker
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: SPCR_DEMO_AUTH_ENABLED
-        value: "false"
-      - key: CLASSIFIER_CACHE_DIR
-        value: "./.models_cache"
-      - key: CLASSIFIER_OFFLINE_ONLY
-        value: "true"
-      - key: GMAIL_POLICY_GATE_APPROVED
-        value: "false"
-      - key: GROQ_LIVE_ENABLED
-        value: "false"
-      - key: GROQ_MODEL
-        value: "openai/gpt-oss-20b"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: spcr-db
-          property: connectionString
-      - key: TOKEN_ENCRYPTION_KEY
-        sync: false
-      - key: WORKER_SHARED_SECRET
-        sync: false
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GOOGLE_GMAIL_REDIRECT_URI
-        sync: false
-      - key: GROQ_API_KEY
-        sync: false
-

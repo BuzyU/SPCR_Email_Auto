@@ -8,6 +8,9 @@ import {
   randomTokenHex,
 } from '../utils/crypto.js';
 import { AuthService } from './authService.js';
+import { assessSenderAuthenticity } from './authenticityService.js';
+import { EmailIntelligenceService } from './emailIntelligenceService.js';
+import { CATEGORY_METADATA, EMAIL_INTELLIGENCE_CATEGORIES, EmailIntelligenceCategory } from '../ml/schema.js';
 import { IncomingAttachmentPayload, IncomingEmailMessage, ScreeningAndMatchingService } from './screeningAndMatchingService.js';
 import { recordAuditEvent } from './auditService.js';
 
@@ -56,8 +59,22 @@ export interface GmailApiClient {
     accessToken: string,
     params: { maxResults: number; pageToken?: string }
   ): Promise<{ messageIds: string[]; nextPageToken?: string }>;
+  getMessageMetadata?(accessToken: string, messageId: string): Promise<GmailRawApiMessage>;
   getMessage(accessToken: string, messageId: string): Promise<GmailRawApiMessage>;
   getAttachmentBytes(accessToken: string, messageId: string, attachmentId: string): Promise<Buffer>;
+}
+
+export class GmailQuotaSafetyStopError extends Error {
+  public readonly code = 'GMAIL_QUOTA_SAFETY_STOP' as const;
+  constructor(
+    message: string,
+    public readonly limitKind: 'per_sync_cap' | 'daily_cap',
+    public readonly unitsUsed: number,
+    public readonly limitUnits: number
+  ) {
+    super(message);
+    this.name = 'GmailQuotaSafetyStopError';
+  }
 }
 
 export class GmailHttpApiError extends Error {
@@ -217,6 +234,28 @@ export class HttpGmailApiClient implements GmailApiClient {
     };
   }
 
+  async getMessageMetadata(accessToken: string, messageId: string): Promise<GmailRawApiMessage> {
+    const url = new URL(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}`
+    );
+    url.searchParams.set('format', 'metadata');
+    for (const h of [
+      'From',
+      'Reply-To',
+      'Subject',
+      'Date',
+      'Message-ID',
+      'In-Reply-To',
+      'References',
+      'List-Unsubscribe',
+      'Authentication-Results',
+      'ARC-Authentication-Results',
+    ]) {
+      url.searchParams.append('metadataHeaders', h);
+    }
+    return this.gmailGetJson(accessToken, url.toString());
+  }
+
   async getMessage(accessToken: string, messageId: string): Promise<GmailRawApiMessage> {
     return this.gmailGetJson(
       accessToken,
@@ -248,15 +287,132 @@ export interface ChangeSource {
 export class GmailSyncService implements ChangeSource {
   public readonly sourceName = 'gmail_history_polling';
   private readonly apiClient: GmailApiClient;
+  private readonly emailIntelligence: EmailIntelligenceService;
 
   constructor(
     private readonly db: Database,
     private readonly config: AppConfig,
     private readonly authService: AuthService,
     private readonly screener: ScreeningAndMatchingService,
-    apiClient?: GmailApiClient
+    apiClient?: GmailApiClient,
+    emailIntelligence?: EmailIntelligenceService
   ) {
     this.apiClient = apiClient || new HttpGmailApiClient(config);
+    this.emailIntelligence =
+      emailIntelligence ||
+      new EmailIntelligenceService({
+        artifactPath: config.emailModelArtifactPath,
+        cacheDir: config.classifierCacheDir,
+        offlineOnly: config.classifierOfflineOnly,
+      });
+  }
+
+  private getTodayKey(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  /**
+   * Mandatory Addendum Section 9:
+   * Enforces hard daily and per-sync Gmail API quota ceilings BEFORE executing any Gmail API request.
+   *Official Gmail API unit weights: getProfile=1, listHistory=2, listMessages=5, getMessage(metadata)=2, getMessage(full)=5, getAttachment=5.
+   */
+  private async consumeGmailQuotaUnitsOrThrow(
+    opKind: 'profile' | 'history' | 'list' | 'metadata' | 'full_message' | 'attachment',
+    units: number,
+    syncRunTracker?: { unitsUsed: number }
+  ): Promise<void> {
+    const dayKey = this.getTodayKey();
+    const perSyncMax = this.config.gmailPerSyncMaxQuotaUnits;
+    const dailyMax = this.config.gmailDailyQuotaSafetyLimitUnits;
+
+    if (syncRunTracker && syncRunTracker.unitsUsed + units > perSyncMax) {
+      const msg = `GMAIL_QUOTA_SAFETY_STOP: Halting Gmail sync safely before ${opKind} (${units} units) would exceed per-sync cap (${syncRunTracker.unitsUsed}/${perSyncMax} units).`;
+      await this.recordQuotaHardStop(dayKey, msg);
+      throw new GmailQuotaSafetyStopError(msg, 'per_sync_cap', syncRunTracker.unitsUsed, perSyncMax);
+    }
+
+    const rowRes = await this.db.query<{ units_used: number }>(
+      `INSERT INTO gmail_quota_usage (day_key, units_used, requests_count)
+       VALUES ($1, 0, 0)
+       ON CONFLICT (day_key) DO UPDATE SET day_key = EXCLUDED.day_key
+       RETURNING units_used`,
+      [dayKey]
+    );
+    const currentDaily = Number(rowRes.rows[0]?.units_used || 0);
+    if (currentDaily + units > dailyMax) {
+      const msg = `GMAIL_QUOTA_SAFETY_STOP: Halting Gmail sync safely before ${opKind} (${units} units) would exceed configured daily quota limit (${currentDaily}/${dailyMax} units).`;
+      await this.recordQuotaHardStop(dayKey, msg);
+      throw new GmailQuotaSafetyStopError(msg, 'daily_cap', currentDaily, dailyMax);
+    }
+
+    const metaInc = opKind === 'metadata' ? 1 : 0;
+    const fullInc = opKind === 'full_message' ? 1 : 0;
+    const attInc = opKind === 'attachment' ? 1 : 0;
+
+    await this.db.query(
+      `UPDATE gmail_quota_usage
+       SET units_used = units_used + $1,
+           requests_count = requests_count + 1,
+           metadata_calls = metadata_calls + $2,
+           full_message_calls = full_message_calls + $3,
+           attachment_calls = attachment_calls + $4,
+           updated_at = NOW()
+       WHERE day_key = $5`,
+      [units, metaInc, fullInc, attInc, dayKey]
+    );
+
+    if (syncRunTracker) {
+      syncRunTracker.unitsUsed += units;
+    }
+  }
+
+  private async recordQuotaHardStop(dayKey: string, reason: string): Promise<void> {
+    await this.db.query(
+      `INSERT INTO gmail_quota_usage (day_key, hard_stop_triggered, last_stop_reason, updated_at)
+       VALUES ($1, TRUE, $2, NOW())
+       ON CONFLICT (day_key) DO UPDATE
+       SET hard_stop_triggered = TRUE, last_stop_reason = EXCLUDED.last_stop_reason, updated_at = NOW()`,
+      [dayKey, reason]
+    );
+    await recordAuditEvent(this.db, {
+      actorEmail: 'system',
+      eventType: 'gmail_quota_safety_stop',
+      entityType: 'gmail_quota',
+      entityId: dayKey,
+      metadata: { reason },
+    });
+  }
+
+  private async recordAttachmentsSkippedByStaging(count: number): Promise<void> {
+    if (count <= 0) return;
+    const dayKey = this.getTodayKey();
+    await this.db.query(
+      `INSERT INTO gmail_quota_usage (day_key, attachments_skipped_by_staging, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (day_key) DO UPDATE
+       SET attachments_skipped_by_staging = gmail_quota_usage.attachments_skipped_by_staging + $2,
+           updated_at = NOW()`,
+      [dayKey, count]
+    );
+  }
+
+  async getQuotaStatus(q: QueryExecutor = this.db) {
+    const dayKey = this.getTodayKey();
+    const res = await q.query<any>('SELECT * FROM gmail_quota_usage WHERE day_key = $1', [dayKey]);
+    const row = res.rows[0] || null;
+    return {
+      dayKey,
+      dailyLimitUnits: this.config.gmailDailyQuotaSafetyLimitUnits,
+      perSyncLimitUnits: this.config.gmailPerSyncMaxQuotaUnits,
+      unitsUsedToday: Number(row?.units_used || 0),
+      requestsCountToday: Number(row?.requests_count || 0),
+      metadataCallsToday: Number(row?.metadata_calls || 0),
+      fullMessageCallsToday: Number(row?.full_message_calls || 0),
+      attachmentCallsToday: Number(row?.attachment_calls || 0),
+      attachmentsSkippedByStagingToday: Number(row?.attachments_skipped_by_staging || 0),
+      hardStopTriggered: Boolean(row?.hard_stop_triggered),
+      lastStopReason: row?.last_stop_reason || null,
+    };
   }
 
   createGmailAuthorizationStart(): { authUrl: string; stateCookieValue: string } {
@@ -300,6 +456,7 @@ export class GmailSyncService implements ChangeSource {
     this.authService.verifySignedOAuthState('gmail', params.cookieState, params.queryState);
 
     const tokenSet = await this.apiClient.exchangeAuthCode(params.code, this.config.googleGmailRedirectUri);
+    await this.consumeGmailQuotaUnitsOrThrow('profile', 1);
     const profile = await this.apiClient.getProfile(tokenSet.accessToken);
 
     const encAccess = encryptSecretString(tokenSet.accessToken, this.config.tokenEncryptionKeyHex);
@@ -441,7 +598,103 @@ export class GmailSyncService implements ChangeSource {
     }
   }
 
-  private async convertRawGmailMessage(accessToken: string, raw: GmailRawApiMessage): Promise<IncomingEmailMessage> {
+  private async getThreadState(threadId?: string | null): Promise<{
+    hasActiveOpportunityInThread: boolean;
+    priorCategories: EmailIntelligenceCategory[];
+  }> {
+    if (!threadId) return { hasActiveOpportunityInThread: false, priorCategories: [] };
+    const oppLinkRes = await this.db.query<{ cnt: string }>(
+      `SELECT COUNT(*)::text AS cnt
+       FROM opportunity_message_links oml
+       JOIN source_messages sm ON sm.id = oml.source_message_id
+       WHERE sm.gmail_thread_id = $1 AND oml.link_state IN ('confirmed', 'proposed')`,
+      [threadId]
+    );
+    const catRes = await this.db.query<{ primary_category: string | null }>(
+      `SELECT so.primary_category
+       FROM source_messages sm
+       JOIN screening_outcomes so ON so.source_message_id = sm.id
+       WHERE sm.gmail_thread_id = $1
+       ORDER BY sm.received_at ASC`,
+      [threadId]
+    );
+    const priorCategories = catRes.rows
+      .map((r) => r.primary_category)
+      .filter((c): c is EmailIntelligenceCategory =>
+        Boolean(c && (EMAIL_INTELLIGENCE_CATEGORIES as readonly string[]).includes(c))
+      );
+    return {
+      hasActiveOpportunityInThread: Number(oppLinkRes.rows[0]?.cnt || '0') > 0,
+      priorCategories,
+    };
+  }
+
+  /**
+   * Mandatory Addendum Section 9:
+   * 3-Stage Gmail Message & Attachment Acquisition:
+   * - Stage 1 (`format=metadata` when supported): pre-screen headers + snippet to short-circuit obvious bulk digests.
+   * - Stage 2 (`format=full` body without attachment blobs): decode MIME text + list attachment descriptors.
+   * - Stage 3 (`getAttachmentBytes`): download attachment bytes ONLY when the email is potentially relevant,
+   *   belongs to an active opportunity thread, or is `REVIEW_REQUIRED` (`uncertain`). Never downloads attachments
+   *   for `unrelated_email`, `job_alert_newsletter`, or `spam_or_scam`!
+   */
+  private async fetchAndNormalizeGmailMessageStaged(
+    accessToken: string,
+    messageId: string,
+    syncRunTracker?: { unitsUsed: number }
+  ): Promise<IncomingEmailMessage> {
+    // Stage 1: Metadata + snippet pre-screen when `getMessageMetadata` is available
+    if (this.apiClient.getMessageMetadata) {
+      await this.consumeGmailQuotaUnitsOrThrow('metadata', 2, syncRunTracker);
+      const metaRaw = await this.callWithQuotaBackoff(() =>
+        this.apiClient.getMessageMetadata!(accessToken, messageId)
+      );
+      const metaHeaders = metaRaw.payload?.headers || [];
+      const getMetaHeader = (name: string) =>
+        metaHeaders.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || null;
+      const listUnsub = getMetaHeader('List-Unsubscribe');
+      const metaSubj = getMetaHeader('Subject') || '(No Subject)';
+      const metaSnippet = metaRaw.snippet || '';
+      const threadState = await this.getThreadState(metaRaw.threadId || null);
+
+      const isClearBulkDigest =
+        Boolean(listUnsub && listUnsub.trim()) &&
+        !threadState.hasActiveOpportunityInThread &&
+        /\b(unsubscribe|daily\s+job\s+alert|weekly\s+(?:job|tech|career)\s+digest|jobs?\s+matching\s+your\s+search|recommended\s+jobs\s+for\s+you|invoice|billing\s+statement|flash\s+sale|%\s*off)\b/i.test(
+          `${metaSubj}\n${metaSnippet}`
+        );
+
+      if (isClearBulkDigest) {
+        const receivedAt = metaRaw.internalDate
+          ? new Date(Number(metaRaw.internalDate)).toISOString()
+          : getMetaHeader('Date')
+            ? new Date(getMetaHeader('Date')!).toISOString()
+            : new Date().toISOString();
+        return {
+          gmailMessageId: metaRaw.id,
+          gmailThreadId: metaRaw.threadId || null,
+          rfcMessageId: getMetaHeader('Message-ID'),
+          inReplyTo: getMetaHeader('In-Reply-To'),
+          referencesHeader: getMetaHeader('References'),
+          listUnsubscribeHeader: listUnsub,
+          fromRaw: getMetaHeader('From') || 'unknown@unknown',
+          replyToRaw: getMetaHeader('Reply-To'),
+          authHeadersRaw:
+            getMetaHeader('Authentication-Results') || getMetaHeader('ARC-Authentication-Results'),
+          subject: metaSubj,
+          receivedAt,
+          snippet: metaSnippet,
+          bodyText: metaSnippet,
+          attachments: [],
+          sourceOrigin: 'gmail_api',
+        };
+      }
+    }
+
+    // Stage 2: Fetch message MIME structure & text WITHOUT downloading remote attachment blobs yet
+    await this.consumeGmailQuotaUnitsOrThrow('full_message', 5, syncRunTracker);
+    const raw = await this.callWithQuotaBackoff(() => this.apiClient.getMessage(accessToken, messageId));
+
     const headers = raw.payload?.headers || [];
     const getHeader = (name: string) =>
       headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || null;
@@ -479,13 +732,73 @@ export class GmailSyncService implements ChangeSource {
       }
     }
 
-    const bodyText = plainBody.trim() || (htmlBody ? stripHtmlTagsToPlainText(htmlBody) : raw.snippet || '');
+    const isHtmlOnly = !plainBody.trim() && Boolean(htmlBody.trim());
+    const rawBodyForScreen = plainBody.trim() || htmlBody.trim() || raw.snippet || '';
+    const bodyText = plainBody.trim() || (htmlBody ? htmlBody.trim() : raw.snippet || '');
+
+    const fromRaw = getHeader('From') || 'unknown@unknown';
+    const replyToRaw = getHeader('Reply-To');
+    const authHeadersRaw = getHeader('Authentication-Results') || getHeader('ARC-Authentication-Results');
+    const listUnsubscribeHeader = getHeader('List-Unsubscribe');
+    const inReplyTo = getHeader('In-Reply-To');
+    const subject = getHeader('Subject') || '(No Subject)';
+
+    // Stage 3: Decide whether remote attachments (`attachmentId`) merit downloading via `getAttachmentBytes`
+    let shouldDownloadRemoteAttachments = false;
+    const remoteAttCount = attachmentParts.filter((ap) => !ap.data && Boolean(ap.attachmentId)).length;
+
+    if (remoteAttCount > 0) {
+      const threadState = await this.getThreadState(raw.threadId || null);
+      const authCheck = await assessSenderAuthenticity(this.db, {
+        fromRaw,
+        replyToRaw,
+        authHeadersRaw,
+        subject,
+        bodyOrSnippet: stripHtmlTagsToPlainText(rawBodyForScreen),
+      });
+      const prePred = await this.emailIntelligence.classifyEmail({
+        fromRaw,
+        replyToRaw,
+        authHeadersRaw,
+        listUnsubscribeHeader,
+        inReplyTo,
+        subject,
+        rawBody: rawBodyForScreen,
+        isHtmlOnly,
+        attachmentFilenames: attachmentParts.map((a) => a.filename),
+        priorThreadCategories: threadState.priorCategories,
+        isSuspiciousSender: authCheck.isSuspicious,
+        riskFlags: authCheck.riskFlags,
+      });
+
+      const isActionableWithDocs =
+        (CATEGORY_METADATA[prePred.primaryCategory].isRecruitmentRelevant &&
+          prePred.primaryCategory !== 'application_acknowledgement' &&
+          prePred.primaryCategory !== 'rejection') ||
+        prePred.primaryCategory === 'uncertain' ||
+        prePred.uncertaintyOutcome === 'REVIEW_REQUIRED' ||
+        threadState.hasActiveOpportunityInThread;
+
+      // Never auto-download attachments from flagged scam/spoofed senders or unrelated/newsletter messages!
+      shouldDownloadRemoteAttachments =
+        isActionableWithDocs &&
+        prePred.primaryCategory !== 'spam_or_scam' &&
+        prePred.primaryCategory !== 'unrelated_email' &&
+        prePred.primaryCategory !== 'job_alert_newsletter' &&
+        !authCheck.isSuspicious;
+
+      if (!shouldDownloadRemoteAttachments) {
+        await this.recordAttachmentsSkippedByStaging(remoteAttCount);
+      }
+    }
+
     const attachments: IncomingAttachmentPayload[] = [];
     for (const ap of attachmentParts) {
       let buf: Buffer | null = null;
       if (ap.data) {
         buf = decodeBase64Url(ap.data);
-      } else if (ap.attachmentId) {
+      } else if (ap.attachmentId && shouldDownloadRemoteAttachments) {
+        await this.consumeGmailQuotaUnitsOrThrow('attachment', 5, syncRunTracker);
         buf = await this.callWithQuotaBackoff(() =>
           this.apiClient.getAttachmentBytes(accessToken, raw.id, ap.attachmentId!)
         );
@@ -509,15 +822,17 @@ export class GmailSyncService implements ChangeSource {
       gmailMessageId: raw.id,
       gmailThreadId: raw.threadId || null,
       rfcMessageId: getHeader('Message-ID'),
-      inReplyTo: getHeader('In-Reply-To'),
+      inReplyTo,
       referencesHeader: getHeader('References'),
-      fromRaw: getHeader('From') || 'unknown@unknown',
-      replyToRaw: getHeader('Reply-To'),
-      authHeadersRaw: getHeader('Authentication-Results') || getHeader('ARC-Authentication-Results'),
-      subject: getHeader('Subject') || '(No Subject)',
+      listUnsubscribeHeader,
+      fromRaw,
+      replyToRaw,
+      authHeadersRaw,
+      subject,
       receivedAt,
       snippet: raw.snippet || null,
       bodyText,
+      isHtmlOnly,
       attachments,
       sourceOrigin: 'gmail_api',
     };
@@ -546,7 +861,7 @@ export class GmailSyncService implements ChangeSource {
   async pollNewMessages(actorEmail = 'worker'): Promise<{
     polledCount: number;
     historyRecoveredFrom404: boolean;
-    results: Array<{ gmailMessageId: string; classification: string; opportunityId: string | null }>;
+    results: Array<{ gmailMessageId: string; classification: string; primaryCategory?: string; opportunityId: string | null }>;
   }> {
     if (!this.config.gmailPolicyGateApproved) {
       throw new Error('GMAIL_POLICY_GATE_BLOCKED: Live Gmail polling is disabled until policy gate approval.');
@@ -562,12 +877,8 @@ export class GmailSyncService implements ChangeSource {
 
     await this.db.query('UPDATE gmail_connections SET last_poll_at = NOW() WHERE id = $1', [conn.id]);
 
-    let accessToken: string;
-    try {
-      accessToken = await this.getValidAccessToken(conn);
-    } catch (err: any) {
-      throw err;
-    }
+    const accessToken = await this.getValidAccessToken(conn);
+    const syncRunTracker = { unitsUsed: 0 };
 
     let historyRecoveredFrom404 = false;
     let nextHistoryId: string | null = conn.last_history_id;
@@ -575,11 +886,12 @@ export class GmailSyncService implements ChangeSource {
 
     try {
       if (!conn.last_history_id) {
-        // Startup catch-up when no cursor is persisted yet
+        await this.consumeGmailQuotaUnitsOrThrow('profile', 1, syncRunTracker);
         const profile = await this.callWithQuotaBackoff(() => this.apiClient.getProfile(accessToken));
         nextHistoryId = profile.historyId;
         let pageToken: string | undefined;
         do {
+          await this.consumeGmailQuotaUnitsOrThrow('list', 5, syncRunTracker);
           const page = await this.callWithQuotaBackoff(() =>
             this.apiClient.listMessages(accessToken, { maxResults: 25, pageToken })
           );
@@ -590,6 +902,7 @@ export class GmailSyncService implements ChangeSource {
         try {
           let pageToken: string | undefined;
           do {
+            await this.consumeGmailQuotaUnitsOrThrow('history', 2, syncRunTracker);
             const hist = await this.callWithQuotaBackoff(() =>
               this.apiClient.listHistory(accessToken, {
                 startHistoryId: conn.last_history_id,
@@ -602,12 +915,13 @@ export class GmailSyncService implements ChangeSource {
           } while (pageToken);
         } catch (histErr: any) {
           if (histErr instanceof GmailHttpApiError && histErr.statusCode === 404) {
-            // Official Google recovery for expired historyId (404): fresh getProfile + bounded resync!
             historyRecoveredFrom404 = true;
+            await this.consumeGmailQuotaUnitsOrThrow('profile', 1, syncRunTracker);
             const profile = await this.callWithQuotaBackoff(() => this.apiClient.getProfile(accessToken));
             nextHistoryId = profile.historyId;
             let pageToken: string | undefined;
             do {
+              await this.consumeGmailQuotaUnitsOrThrow('list', 5, syncRunTracker);
               const page = await this.callWithQuotaBackoff(() =>
                 this.apiClient.listMessages(accessToken, { maxResults: 25, pageToken })
               );
@@ -621,22 +935,30 @@ export class GmailSyncService implements ChangeSource {
       }
 
       const uniqueIds = Array.from(new Set(messageIdsToFetch));
-      const results: Array<{ gmailMessageId: string; classification: string; opportunityId: string | null }> = [];
+      const results: Array<{
+        gmailMessageId: string;
+        classification: string;
+        primaryCategory?: string;
+        opportunityId: string | null;
+      }> = [];
 
       for (const msgId of uniqueIds) {
-        // Skip API download if message ID was already processed idempotently
         const already = await this.db.query<{ id: string }>(
           'SELECT id FROM source_messages WHERE gmail_message_id = $1',
           [msgId]
         );
         if (already.rows[0]) continue;
 
-        const rawMsg = await this.callWithQuotaBackoff(() => this.apiClient.getMessage(accessToken, msgId));
-        const normalized = await this.convertRawGmailMessage(accessToken, rawMsg);
+        const normalized = await this.fetchAndNormalizeGmailMessageStaged(
+          accessToken,
+          msgId,
+          syncRunTracker
+        );
         const scanOut = await this.screener.scanEmailMessage(normalized, 'auto_monitor', actorEmail);
         results.push({
           gmailMessageId: msgId,
           classification: scanOut.classification,
+          primaryCategory: scanOut.primaryCategory,
           opportunityId: scanOut.opportunityId,
         });
       }
@@ -668,10 +990,9 @@ export class GmailSyncService implements ChangeSource {
 
   /**
    * Manual Scan action triggered from Gmail Extension or Dashboard for a specific Gmail message ID.
-   * Runs the exact same non-Groq screening pipeline!
+   * Runs the exact same non-Groq staged screening pipeline!
    */
   async manualScanGmailMessageById(gmailMessageId: string, actorEmail: string) {
-    // Check if synthetic message already exists locally first
     const localExisting = await this.db.query<{ id: string }>(
       'SELECT id FROM source_messages WHERE gmail_message_id = $1',
       [gmailMessageId]
@@ -691,6 +1012,12 @@ export class GmailSyncService implements ChangeSource {
         sourceMessageId: localExisting.rows[0].id,
         gmailMessageId,
         classification: out.classification,
+        primaryCategory: out.primary_category || 'uncertain',
+        multiLabels: out.multi_labels_json || [],
+        uncertaintyOutcome: out.uncertainty_outcome || 'REVIEW_REQUIRED',
+        uncertaintyReasons: out.uncertainty_reasons_json || [],
+        modelVersion: out.model_version || 'unknown',
+        structuredExtraction: out.structured_extraction_json || null,
         confidence: Number(out.confidence),
         margin: Number(out.margin),
         authenticityLabel: out.authenticity_label,
@@ -718,8 +1045,12 @@ export class GmailSyncService implements ChangeSource {
     }
 
     const accessToken = await this.getValidAccessToken(conn);
-    const rawMsg = await this.callWithQuotaBackoff(() => this.apiClient.getMessage(accessToken, gmailMessageId));
-    const normalized = await this.convertRawGmailMessage(accessToken, rawMsg);
+    const syncRunTracker = { unitsUsed: 0 };
+    const normalized = await this.fetchAndNormalizeGmailMessageStaged(
+      accessToken,
+      gmailMessageId,
+      syncRunTracker
+    );
     return this.screener.scanEmailMessage(normalized, 'manual_scan', actorEmail);
   }
 
@@ -734,11 +1065,18 @@ export class GmailSyncService implements ChangeSource {
     const queueCountRes = await q.query<{ cnt: string }>(
       `SELECT COUNT(*)::text AS cnt FROM opportunities WHERE status IN ('needs_review', 'ready_for_draft', 'draft_in_review')`
     );
+    const quota = await this.getQuotaStatus(q);
 
     const lease = leaseRes.rows[0] || null;
     const workerActive = Boolean(lease && new Date(lease.expires_at).getTime() > Date.now());
 
     return {
+      operatingMode: this.config.operatingMode,
+      localSyncIntervalSeconds: this.config.localSyncIntervalSeconds,
+      deploymentContinuityNote:
+        this.config.operatingMode === 'LOCAL_ZERO_COST'
+          ? 'LOCAL_ZERO_COST mode: background Gmail sync runs locally only while this computer and SPCR process are running.'
+          : 'FREE_CLOUD_OPTIONAL mode: free-tier cloud web services sleep after ~15 minutes of inactivity and DO NOT provide continuous 24/7 background monitoring while asleep.',
       policyGateApproved: this.config.gmailPolicyGateApproved,
       policyGateExplanation: this.config.gmailPolicyGateApproved
         ? 'Approved by owner configuration'
@@ -747,6 +1085,7 @@ export class GmailSyncService implements ChangeSource {
       workerActive,
       workerLease: lease,
       queuedCandidatesCount: Number.parseInt(queueCountRes.rows[0]?.cnt || '0', 10),
+      quota,
     };
   }
 }

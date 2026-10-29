@@ -1,0 +1,564 @@
+{
+  "generatedAt": "2026-10-29T18:55:02.285Z",
+  "modelVersion": "spcr-email-intel-v1.0.0",
+  "architectureType": "hybrid_minilm_tfidf_logreg",
+  "datasetVersion": "spcr-curated-v1.0.0-258aca8317",
+  "artifactSha256": "815d8ff57f14835a39657613bc11c941f50921bda98e1a7f7d2f9ba340fb7347",
+  "calibrationDisclosure": {
+    "isCalibratedProbability": false,
+    "statement": "Confidence scores are uncalibrated logistic sigmoid outputs from class-balanced L2 One-vs-Rest linear classifiers. They are NOT calibrated probabilities and must not be interpreted as empirical likelihoods."
+  },
+  "leakageAudit": {
+    "sharedThreadIdsAcrossSplits": 0,
+    "sharedSenderOrgsAcrossSplits": 0,
+    "passedZeroLeakage": true
+  },
+  "preDeclaredAcceptanceThresholds": {
+    "declaredBeforeFinalTestRunAt": "2026-10-29T23:18:00+05:30",
+    "policyNote": "Pre-declared acceptance thresholds locked BEFORE running held-out test evaluation per Mandatory Addendum Section 6. Curated/synthetic held-out results and real-inbox evaluation MUST be reported separately.",
+    "minimumHeldOutMacroF1": 0.8,
+    "minimumRelevantOpportunityRecall": 0.85,
+    "maximumSilentOpportunityDiscardRate": 0.02,
+    "maximumLeakageGroupsAcrossSplits": 0
+  },
+  "thresholdCheckResults": {
+    "heldOutMacroF1Passed": true,
+    "relevantOpportunityRecallPassed": true,
+    "silentOpportunityDiscardRatePassed": true,
+    "zeroLeakagePassed": true,
+    "allThresholdsPassed": true
+  },
+  "heldOutTestEvaluation": {
+    "sampleCount": 63,
+    "accuracy": 0.9048,
+    "macroPrecision": 0.927,
+    "macroRecall": 0.9071,
+    "macroF1": 0.9048,
+    "weightedF1": 0.9012,
+    "multiLabelMicroF1": 0.8905,
+    "relevantOpportunityRecall": 1,
+    "silentOpportunityDiscardCount": 0,
+    "silentOpportunityDiscardRate": 0,
+    "bootstrap95Ci": {
+      "macroF1Low": 0.8046,
+      "macroF1High": 0.9712,
+      "accuracyLow": 0.8254,
+      "accuracyHigh": 0.9683
+    },
+    "perClass": [
+      {
+        "label": "relevant_opportunity",
+        "displayName": "Relevant job or internship opportunity",
+        "precision": 0.7143,
+        "recall": 1,
+        "f1": 0.8333,
+        "support": 5,
+        "predictedCount": 7
+      },
+      {
+        "label": "recruiter_outreach",
+        "displayName": "Recruiter outreach or direct hiring communication",
+        "precision": 0.75,
+        "recall": 0.6,
+        "f1": 0.6667,
+        "support": 5,
+        "predictedCount": 4
+      },
+      {
+        "label": "jd_or_details_followup",
+        "displayName": "Job description or job-details follow-up",
+        "precision": 1,
+        "recall": 0.8,
+        "f1": 0.8889,
+        "support": 5,
+        "predictedCount": 4
+      },
+      {
+        "label": "application_acknowledgement",
+        "displayName": "Application submitted or application acknowledgement",
+        "precision": 1,
+        "recall": 1,
+        "f1": 1,
+        "support": 4,
+        "predictedCount": 4
+      },
+      {
+        "label": "screening_or_eligibility",
+        "displayName": "Screening or eligibility request",
+        "precision": 1,
+        "recall": 0.8,
+        "f1": 0.8889,
+        "support": 5,
+        "predictedCount": 4
+      },
+      {
+        "label": "online_assessment",
+        "displayName": "Online assessment, coding test or assignment",
+        "precision": 0.7143,
+        "recall": 1,
+        "f1": 0.8333,
+        "support": 5,
+        "predictedCount": 7
+      },
+      {
+        "label": "interview_invitation",
+        "displayName": "Interview invitation, scheduling, rescheduling or confirmation",
+        "precision": 1,
+        "recall": 1,
+        "f1": 1,
+        "support": 5,
+        "predictedCount": 5
+      },
+      {
+        "label": "interview_followup",
+        "displayName": "Interview follow-up or next-round update",
+        "precision": 1,
+        "recall": 1,
+        "f1": 1,
+        "support": 5,
+        "predictedCount": 5
+      },
+      {
+        "label": "offer",
+        "displayName": "Job offer or internship offer",
+        "precision": 1,
+        "recall": 1,
+        "f1": 1,
+        "support": 4,
+        "predictedCount": 4
+      },
+      {
+        "label": "rejection",
+        "displayName": "Rejection or unsuccessful application",
+        "precision": 1,
+        "recall": 0.5,
+        "f1": 0.6667,
+        "support": 4,
+        "predictedCount": 2
+      },
+      {
+        "label": "job_alert_newsletter",
+        "displayName": "Job alert or bulk recruitment newsletter",
+        "precision": 1,
+        "recall": 1,
+        "f1": 1,
+        "support": 4,
+        "predictedCount": 4
+      },
+      {
+        "label": "unrelated_email",
+        "displayName": "Unrelated email",
+        "precision": 1,
+        "recall": 1,
+        "f1": 1,
+        "support": 4,
+        "predictedCount": 4
+      },
+      {
+        "label": "spam_or_scam",
+        "displayName": "Spam, suspicious recruitment message or possible scam",
+        "precision": 1,
+        "recall": 1,
+        "f1": 1,
+        "support": 4,
+        "predictedCount": 4
+      },
+      {
+        "label": "uncertain",
+        "displayName": "Uncertain, insufficient evidence or unknown category",
+        "precision": 0.8,
+        "recall": 1,
+        "f1": 0.8889,
+        "support": 4,
+        "predictedCount": 5
+      }
+    ],
+    "confusionMatrixLabels": [
+      "relevant_opportunity",
+      "recruiter_outreach",
+      "jd_or_details_followup",
+      "application_acknowledgement",
+      "screening_or_eligibility",
+      "online_assessment",
+      "interview_invitation",
+      "interview_followup",
+      "offer",
+      "rejection",
+      "job_alert_newsletter",
+      "unrelated_email",
+      "spam_or_scam",
+      "uncertain"
+    ],
+    "confusionMatrix": [
+      [
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        2,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4
+      ]
+    ],
+    "sliceMetrics": {
+      "standard_recruitment_communication": {
+        "count": 21,
+        "accuracy": 0.9048,
+        "silentDiscards": 0
+      },
+      "unusual_wording_no_standard_keywords": {
+        "count": 3,
+        "accuracy": 0.6667,
+        "silentDiscards": 0
+      },
+      "empty_malformed_short_or_html_only": {
+        "count": 3,
+        "accuracy": 1,
+        "silentDiscards": 0
+      },
+      "jd_or_followup_update": {
+        "count": 5,
+        "accuracy": 0.8,
+        "silentDiscards": 0
+      },
+      "third_party_assessment_or_interview_platform": {
+        "count": 10,
+        "accuracy": 1,
+        "silentDiscards": 0
+      },
+      "offer_or_rejection_stage": {
+        "count": 8,
+        "accuracy": 0.75,
+        "silentDiscards": 0
+      },
+      "multi_message_thread": {
+        "count": 7,
+        "accuracy": 0.8571,
+        "silentDiscards": 0
+      },
+      "newsletter_with_recruitment_keywords": {
+        "count": 4,
+        "accuracy": 1,
+        "silentDiscards": 0
+      },
+      "unrelated_with_recruitment_terminology": {
+        "count": 2,
+        "accuracy": 1,
+        "silentDiscards": 0
+      },
+      "spoofed_or_scam_recruiting": {
+        "count": 4,
+        "accuracy": 1,
+        "silentDiscards": 0
+      },
+      "genuinely_uncertain_ambiguous": {
+        "count": 4,
+        "accuracy": 1,
+        "silentDiscards": 0
+      }
+    },
+    "falseNegatives": []
+  },
+  "validationComparisonSummary": {
+    "generatedAt": "2026-10-29T18:55:00.504Z",
+    "modelVersion": "spcr-email-intel-v1.0.0",
+    "datasetVersion": "spcr-curated-v1.0.0-258aca8317",
+    "splitCounts": {
+      "train": 155,
+      "val": 57,
+      "test": 63,
+      "extraApprovedFeedbackUsed": 0
+    },
+    "selectedArchitecture": "hybrid_minilm_tfidf_logreg",
+    "selectionRationale": "Selected \"hybrid_minilm_tfidf_logreg\" (lambda=0.003) because on the group-disjoint validation split it improved Macro-F1 from 0.8627 to 0.8972 (delta=+0.0345, silentDiscardRate=0.0000) while keeping local CPU latency at ~8.543 ms/email and ₹0 cost using the already-pinned local ONNX MiniLM cache.",
+    "candidates": [
+      {
+        "candidateName": "naive_majority",
+        "classifierKind": "deterministic_screening_rules",
+        "isTrainedSupervisedModel": false,
+        "selectedBestLambda": null,
+        "valMacroF1": 0.0115,
+        "valAccuracy": 0.0877,
+        "valMultiLabelMicroF1": 0.1034,
+        "valRelevantOpportunityRecall": 1,
+        "valSilentOpportunityDiscardRate": 0,
+        "avgCpuLatencyMsPerEmail": 0.001,
+        "estimatedResidentRamMb": 0.1,
+        "artifactSizeBytes": null,
+        "notes": "Predicts most frequent training label (relevant_opportunity) for every message. Fails completely on minority stages and silently discards real opportunities."
+      },
+      {
+        "candidateName": "minilm_exemplar_zero_shot",
+        "classifierKind": "exemplar_similarity_classifier",
+        "isTrainedSupervisedModel": false,
+        "selectedBestLambda": null,
+        "valMacroF1": 0.2963,
+        "valAccuracy": 0.386,
+        "valMultiLabelMicroF1": 0.3966,
+        "valRelevantOpportunityRecall": 0.7778,
+        "valSilentOpportunityDiscardRate": 0,
+        "avgCpuLatencyMsPerEmail": 4.719,
+        "estimatedResidentRamMb": 85,
+        "artifactSizeBytes": 23100000,
+        "notes": "Zero-shot cosine similarity over Xenova/all-MiniLM-L6-v2 embeddings against hand-written exemplars. Cannot separate all 14 fine-grained recruitment stages (e.g. OA vs interview follow-up vs offer vs rejection vs acknowledgement)."
+      },
+      {
+        "candidateName": "tfidf_ovr_logreg",
+        "classifierKind": "supervised_trained_classifier",
+        "isTrainedSupervisedModel": true,
+        "selectedBestLambda": 0.0025,
+        "valMacroF1": 0.8627,
+        "valAccuracy": 0.8596,
+        "valMultiLabelMicroF1": 0.8718,
+        "valRelevantOpportunityRecall": 1,
+        "valSilentOpportunityDiscardRate": 0,
+        "avgCpuLatencyMsPerEmail": 0.129,
+        "estimatedResidentRamMb": 8,
+        "artifactSizeBytes": 211065,
+        "notes": "Supervised L2 One-vs-Rest Logistic Regression over sublinear unigram/bigram zone TF-IDF + 42 thread/structural/missingness features. Sub-millisecond CPU inference, tiny memory footprint, 100% deterministic."
+      },
+      {
+        "candidateName": "hybrid_minilm_tfidf_logreg",
+        "classifierKind": "supervised_trained_classifier",
+        "isTrainedSupervisedModel": true,
+        "selectedBestLambda": 0.003,
+        "valMacroF1": 0.8972,
+        "valAccuracy": 0.8947,
+        "valMultiLabelMicroF1": 0.906,
+        "valRelevantOpportunityRecall": 1,
+        "valSilentOpportunityDiscardRate": 0,
+        "avgCpuLatencyMsPerEmail": 8.543,
+        "estimatedResidentRamMb": 92,
+        "artifactSizeBytes": 261332,
+        "notes": "Supervised L2 One-vs-Rest Logistic Regression combining 384-d Xenova/all-MiniLM-L6-v2 sentence embeddings + zone TF-IDF + 42 thread/structural/missingness features. Captures dense semantic paraphrases alongside exact lexical & thread cues."
+      }
+    ]
+  },
+  "syntheticRegressionSuite": {
+    "disclaimer": "Synthetic 20-fixture regression suite from Phase 1. Retained strictly for smoke regression testing; NOT proof of reliable real-world mailbox performance.",
+    "totalFixtures": 20,
+    "actionableRoutingAccuracy": 1,
+    "silentActionableDiscards": 0
+  },
+  "realInboxConsentedEvaluation": {
+    "status": "UNVERIFIED_NO_REAL_MAILBOX_DATA",
+    "sampleCount": 0,
+    "statement": "0 consented real-world mailbox examples are currently present in ml/data/real_inbox_consented_eval.jsonl. Real-inbox accuracy remains UNVERIFIED until the placement office connects Gmail and approves anonymized feedback examples.",
+    "summary": null
+  }
+}
